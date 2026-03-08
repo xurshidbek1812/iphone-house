@@ -20,9 +20,9 @@ if (!JWT_SECRET) {
 
 // Middleware
 app.use(cors({
-    origin: '*', // <-- YULDUZCHA (*) QO'YING (Bu "Hamma IP ga ruxsat" degani)
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+  origin: ['https://iphone-house-frontend.vercel.app'], // Faqat sizning saytingizga ruxsat
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json()); // Allow Backend to read JSON data
 
@@ -824,4 +824,5 @@ app.get('/api/inventory/history', authenticateToken, async (req, res) => {
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
+
 });
