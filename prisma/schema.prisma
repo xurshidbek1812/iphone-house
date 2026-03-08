@@ -1,0 +1,279 @@
+// This is your Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --- 1. STAFF (ADMINS) ---
+model User {
+  id           Int      @id @default(autoincrement())
+  fullName     String
+  username     String   @unique
+  password     String
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  
+  // Relations
+  sales        Sale[]
+  contracts    Contract[]
+  transactions Transaction[]
+}
+
+// --- 2. MIJOZLAR (CUSTOMERS - TO'LIQ) ---
+model Customer {
+  id            Int      @id @default(autoincrement())
+  firstName     String
+  lastName      String
+  middleName    String?
+  gender        String   // "ERKAK", "AYOL"
+  dob           DateTime // Tug'ilgan sanasi
+  pinfl         String   @unique // JSHSHIR (14 ta raqam)
+  note          String?  // Izoh
+
+  // Pasport ma'lumotlari (1 ga 1 bog'lanish)
+  document      CustomerDocument?
+
+  // Manzil (1 ga 1)
+  address       CustomerAddress?
+
+  // Telefon raqamlari (1 ga ko'p)
+  phones        CustomerPhone[]
+
+  // Ish joyi (1 ga 1)
+  job           CustomerJob?
+
+  // Tizim ma'lumotlari
+  createdAt     DateTime @default(now())
+  
+  // Bog'lanishlar (Eski modellarga ulash)
+  contracts     Contract[]
+  sales         Sale[]
+  
+  // Eski maydonlar (moslik uchun, lekin yangi tizimda ishlatilmasligi mumkin)
+  isBlacklisted Boolean  @default(false)
+  bonusBalance  Decimal  @default(0)
+}
+
+model CustomerDocument {
+  id           Int      @id @default(autoincrement())
+  customerId   Int      @unique
+  customer     Customer @relation(fields: [customerId], references: [id])
+  
+  type         String   // "Passport", "ID Card", "Guvohnoma"
+  series       String   // "AA"
+  number       String   // "1234567"
+  givenDate    DateTime // Berilgan sana
+  expiryDate   DateTime // Amal qilish muddati
+  givenBy      String   // Kim tomonidan berilgan
+}
+
+model CustomerAddress {
+  id           Int      @id @default(autoincrement())
+  customerId   Int      @unique
+  customer     Customer @relation(fields: [customerId], references: [id])
+
+  regionId     Int      // Viloyat (ID bo'yicha qoladi)
+  districtId   Int      // Tuman (ID bo'yicha qoladi)
+  
+  mfy          String?  // Endi bu shunchaki matn (Text)
+  
+  street       String?
+  landmark     String?
+}
+
+model CustomerPhone {
+  id           Int      @id @default(autoincrement())
+  customerId   Int
+  customer     Customer @relation(fields: [customerId], references: [id])
+  
+  name         String   // "Shaxsiy raqam", "Dadasini raqami"
+  phone        String   // "+998901234567"
+  isMain       Boolean  @default(false) // Asosiy raqammi?
+}
+
+model CustomerJob {
+  id           Int      @id @default(autoincrement())
+  customerId   Int      @unique
+  customer     Customer @relation(fields: [customerId], references: [id])
+
+  type         String   // "ISHCHI", "NAFAQA", "ISHSIZ"
+  
+  // Agar "ISHCHI" bo'lsa:
+  companyName  String?  // Ish joyi nomi
+  position     String?  // Lavozimi
+
+  source       String?  // Mijoz oqimi manbasi
+}
+
+// --- 3. HUDUDLAR (Tuman va Viloyatlar) ---
+model Region {
+  id        Int        @id @default(autoincrement())
+  name      String
+  districts District[]
+}
+
+model District {
+  id        Int      @id @default(autoincrement())
+  name      String
+  regionId  Int
+  region    Region   @relation(fields: [regionId], references: [id])
+}
+
+// --- 4. TOVARLAR VA PARTIYALAR ---
+model Product {
+  id             Int             @id @default(autoincrement())
+  customId       Int             @unique
+  name           String
+  category       String          @default("-")
+  buyPrice       Float           @default(0)
+  salePrice      Float           @default(0)
+  quantity       Float           @default(0)
+  unit           String          @default("Dona")
+  createdAt      DateTime        @default(now())
+  buyCurrency    String          @default("USD")
+  saleCurrency   String          @default("UZS")
+  
+  // Aloqalar
+  saleItems      SaleItem[]
+  contractItems  ContractItem[]
+  inventoryItems InventoryItem[] 
+
+  // YANGI: FIFO PARTIYALAR UCHUN ALOQA
+  batches        ProductBatch[]
+}
+
+// --- YANGI MODEL: TAMINOTCHIDAN KELGAN HAR BIR KIRIM (PARTIYA) ---
+model ProductBatch {
+  id            Int      @id @default(autoincrement())
+  
+  initialQty    Float    // Boshida nechta kelgan edi (Tarix uchun)
+  quantity      Float    // Hozir shu partiyadan nechta qoldi (Sotilganda shu yerdan ayiriladi)
+  
+  buyPrice      Float    // Aynan shu partiyaning olingan narxi
+  buyCurrency   String   @default("USD")
+  createdAt     DateTime @default(now()) 
+
+  // Tovar bilan bog'lanish
+  productId     Int
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  isArchived    Boolean  @default(false)
+}
+
+// --- 5. SALES (NAQD SAVDO) ---
+model Sale {
+  id          Int      @id @default(autoincrement())
+  totalAmount Decimal
+  date        DateTime @default(now())
+  
+  customerId  Int?     
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  
+  userId      Int      
+  user        User     @relation(fields: [userId], references: [id])
+
+  items       SaleItem[]
+}
+
+model SaleItem {
+  id        Int     @id @default(autoincrement())
+  saleId    Int
+  sale      Sale    @relation(fields: [saleId], references: [id])
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Decimal 
+}
+
+// --- 6. CONTRACTS (MUDDATLI TO'LOV) ---
+model Contract {
+  id             Int      @id @default(autoincrement())
+  contractNumber String   @unique
+  date           DateTime @default(now())
+  
+  customerId     Int
+  customer       Customer @relation(fields: [customerId], references: [id])
+  
+  userId         Int      
+  user           User     @relation(fields: [userId], references: [id])
+
+  // Money
+  totalAmount    Decimal
+  paidAmount     Decimal  @default(0)
+  debtAmount     Decimal
+  durationMonths Int      // 3, 6, 9, 12
+  
+  status         String   @default("ACTIVE") // ACTIVE, CLOSED, OVERDUE
+
+  items          ContractItem[]
+  payments       Payment[]
+}
+
+model ContractItem {
+  id         Int      @id @default(autoincrement())
+  contractId Int
+  contract   Contract @relation(fields: [contractId], references: [id])
+  productId  Int
+  product    Product  @relation(fields: [productId], references: [id])
+  quantity   Int
+  price      Decimal
+}
+
+// --- 7. FINANCE (KASSA) ---
+model Transaction {
+  id          Int      @id @default(autoincrement())
+  createdAt   DateTime @default(now())
+  amount      Decimal
+  currency    String   @default("UZS") 
+  type        String   // INCOME, EXPENSE
+  category    String   
+  description String?
+  
+  userId      Int      
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Payment {
+  id         Int      @id @default(autoincrement())
+  contractId Int
+  contract   Contract @relation(fields: [contractId], references: [id])
+  amount     Decimal
+  date       DateTime @default(now())
+  type       String   // CASH, CARD, CLICK
+}
+
+// --- TA'MINOTCHILAR ---
+model Supplier {
+  id        Int      @id @default(autoincrement())
+  customId  String?
+  name      String
+  phone     String?
+  address   String?
+  createdAt DateTime @default(now())
+}
+
+// --- SANOQ TARIXI (INVENTORY HISTORY) ---
+model InventoryAct {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @default(now())
+  totalDiff Float    @default(0) // Umumiy farq (Masalan: -5 ta yoki +2 ta)
+  isStockUpdated Boolean         @default(false)
+  items     InventoryItem[]
+}
+
+model InventoryItem {
+  id             Int          @id @default(autoincrement())
+  inventoryActId Int
+  inventoryAct   InventoryAct @relation(fields: [inventoryActId], references: [id])
+  
+  productId      Int
+  product        Product      @relation(fields: [productId], references: [id])
+  
+  systemQty      Float        // Kompyuterdagi eski son
+  countedQty     Float        // Sanalgan haqiqiy son
+  diff           Float        // Farq
+}
