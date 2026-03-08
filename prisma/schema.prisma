@@ -15,6 +15,7 @@ model User {
   fullName     String
   username     String   @unique
   password     String
+  phone        String?  // <--- MANA SHU YAZUVNI QO'SHING
   role         String   @default("ADMIN")
   createdAt    DateTime @default(now())
   
