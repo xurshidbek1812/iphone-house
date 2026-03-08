@@ -111,16 +111,75 @@ app.get('/', (req, res) => {
 });
 
 // 2. Users Route
-// --- XODIMLAR (USERS) API ---
+// ==========================================
+// XODIMLAR (USERS) UCHUN API SO'ROVLARI
+// ==========================================
+
+// 1. Barcha xodimlarni ko'rish
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-    // Hozircha barcha userlarni olamiz (keyinchalik rol bo'yicha filtrlash mumkin)
     const users = await prisma.user.findMany({
-      select: { id: true, fullName: true, username: true }
+        orderBy: { id: 'desc' }
     });
     res.json(users);
   } catch (error) {
-    res.status(500).json({ error: "Xodimlarni olishda xatolik" });
+    res.status(500).json({ message: "Xodimlarni yuklashda xato yuz berdi" });
+  }
+});
+
+// 2. Yangi xodim qo'shish
+app.post('/api/users', authenticateToken, async (req, res) => {
+  try {
+    const { username, password, fullName, phone, role } = req.body;
+    
+    // Bunday login oldin bor-yo'qligini tekshirish
+    const existingUser = await prisma.user.findUnique({ where: { username } });
+    if (existingUser) {
+        return res.status(400).json({ message: "Bu login allaqachon band! Boshqa login o'ylab toping." });
+    }
+
+    const newUser = await prisma.user.create({
+      data: { username, password, fullName, phone, role }
+    });
+    
+    res.json(newUser);
+  } catch (error) {
+    console.error("Xodim qo'shishda xato:", error);
+    res.status(500).json({ message: "Serverda xatolik yuz berdi" });
+  }
+});
+
+// 3. Xodimni tahrirlash (Yangilash)
+app.put('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { username, password, fullName, phone, role } = req.body;
+    
+    const updateData = { username, fullName, phone, role };
+    
+    // Agar parol yozilgan bo'lsa, parolni ham yangilaymiz
+    if (password) {
+        updateData.password = password;
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id: Number(id) },
+      data: updateData
+    });
+    res.json(updatedUser);
+  } catch (error) {
+    res.status(500).json({ message: "Yangilashda xato yuz berdi" });
+  }
+});
+
+// 4. Xodimni o'chirish
+app.delete('/api/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await prisma.user.delete({ where: { id: Number(id) } });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: "O'chirishda xato yuz berdi" });
   }
 });
 
@@ -826,3 +885,4 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
