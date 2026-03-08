@@ -132,14 +132,16 @@ app.post('/api/users', authenticateToken, async (req, res) => {
   try {
     const { username, password, fullName, phone, role } = req.body;
     
-    // Bunday login oldin bor-yo'qligini tekshirish
     const existingUser = await prisma.user.findUnique({ where: { username } });
     if (existingUser) {
         return res.status(400).json({ message: "Bu login allaqachon band! Boshqa login o'ylab toping." });
     }
 
+    // 🌟 PRO FIX: PAROLNI BAZAGA YUBORISHDAN OLDIN SHIFRLAYMIZ!
+    const hashedPassword = await bcrypt.hash(password, 10);
+
     const newUser = await prisma.user.create({
-      data: { username, password, fullName, phone, role }
+      data: { username, password: hashedPassword, fullName, phone, role } // <--- shifrlangan parol ketdi
     });
     
     res.json(newUser);
@@ -157,9 +159,9 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
     
     const updateData = { username, fullName, phone, role };
     
-    // Agar parol yozilgan bo'lsa, parolni ham yangilaymiz
+    // 🌟 PRO FIX: Agar parol o'zgartirilayotgan bo'lsa, uni ham shifrlaymiz
     if (password) {
-        updateData.password = password;
+        updateData.password = await bcrypt.hash(password, 10);
     }
 
     const updatedUser = await prisma.user.update({
