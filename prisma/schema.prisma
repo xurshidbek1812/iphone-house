@@ -58,6 +58,7 @@ model Customer {
   // Eski maydonlar (moslik uchun, lekin yangi tizimda ishlatilmasligi mumkin)
   isBlacklisted Boolean  @default(false)
   bonusBalance  Decimal  @default(0)
+  blacklistRequests BlacklistRequest[]
 }
 
 // --- QORA RO'YXAT BUYURTMALARI ---
