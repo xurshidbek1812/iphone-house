@@ -727,6 +727,7 @@ app.post('/api/products/increase-stock', authenticateToken, async (req, res) => 
         }
 
         const price = Number(item.buyPrice || item.price || item.inputPrice || currentProduct.buyPrice);
+        const salePrice = Number(item.salePrice || item.inputSalePrice || currentProduct.salePrice);
         const currency = item.buyCurrency || item.currency || item.inputCurrency || currentProduct.buyCurrency || 'UZS';
 
         await tx.productBatch.create({
@@ -734,7 +735,8 @@ app.post('/api/products/increase-stock', authenticateToken, async (req, res) => 
             productId: productId,
             initialQty: addedQty,
             quantity: addedQty, 
-            buyPrice: price,    
+            buyPrice: price,
+            salePrice: salePrice,  
             buyCurrency: currency
           }
         });
@@ -743,7 +745,8 @@ app.post('/api/products/increase-stock', authenticateToken, async (req, res) => 
           where: { id: productId },
           data: {
             quantity: { increment: addedQty },
-            buyPrice: price,    
+            buyPrice: price,
+            salePrice: salePrice,  
             buyCurrency: currency
           }
         });
@@ -913,6 +916,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
