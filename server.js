@@ -20,7 +20,9 @@ if (!JWT_SECRET) {
 
 // Middleware
 app.use(cors({
-  origin: ['https://iphone-house-frontend.vercel.app'], // Faqat sizning saytingizga ruxsat
+  origin: [ 'https://iphone-house-frontend.vercel.app',
+            'https://iphone-house.store',
+            'https://www.iphone-house.store''],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -887,4 +889,5 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
