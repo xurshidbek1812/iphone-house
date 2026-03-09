@@ -156,6 +156,7 @@ model ProductBatch {
   quantity      Float    // Hozir shu partiyadan nechta qoldi (Sotilganda shu yerdan ayiriladi)
   
   buyPrice      Float    // Aynan shu partiyaning olingan narxi
+  salePrice     Float?
   buyCurrency   String   @default("USD")
   createdAt     DateTime @default(now())
   supplierName   String?
