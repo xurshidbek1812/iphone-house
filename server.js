@@ -462,16 +462,55 @@ app.get('/api/categories', authenticateToken, async (req, res) => {
   res.json(categories);
 });
 
-// 2. Add a new category (TO'G'RILANDI: authenticateToken qo'shildi)
+// 2. Add a new category (MUKAMMAL VA HIMOYALANGAN HOLAT)
 app.post('/api/categories', authenticateToken, async (req, res) => {
   const { name } = req.body;
+
+  // 1-HIMOYA: Bo'sh nom yuborilishini to'xtatish
+  if (!name || name.trim() === '') {
+      return res.status(400).json({ error: "Kategoriya nomi kiritilmadi!" });
+  }
+
   try {
-    const category = await prisma.category.create({
-      data: { name }
+    // 2-HIMOYA: Bunday nomli kategoriya bazada bor-yo'qligini tekshirish
+    // mode: 'insensitive' degani "Telefon" bilan "telefon" ni bir xil deb tushunadi
+    const existingCategory = await prisma.category.findFirst({
+        where: {
+            name: {
+                equals: name.trim(),
+                mode: 'insensitive' 
+            }
+        }
     });
+
+    if (existingCategory) {
+        return res.status(400).json({ error: "Bu kategoriya bazada allaqachon mavjud!" });
+    }
+
+    // 3. Hamma tekshiruvdan o'tsa, keyin saqlaymiz
+    const category = await prisma.category.create({
+      data: { name: name.trim() }
+    });
+    
     res.json(category);
   } catch (error) {
-    res.status(500).json({ error: "Kategoriya qo'shishda xatolik" });
+    console.error("Kategoriya qo'shishda xatolik:", error);
+    res.status(500).json({ error: "Kategoriya qo'shishda server xatosi yuz berdi" });
+  }
+});
+
+// 3. Kategoriyani o'chirish (DELETE)
+app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
+  try {
+    const categoryId = Number(req.params.id);
+    await prisma.category.delete({
+      where: { id: categoryId }
+    });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Kategoriyani o'chirishda xato:", error);
+    // Agar bu kategoriyaga ulangan tovarlar bo'lsa, xato beradi (himoya)
+    res.status(400).json({ error: "Bu kategoriyani o'chirib bo'lmaydi. Unga ulangan tovarlar mavjud!" });
   }
 });
 
@@ -916,6 +955,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
