@@ -60,6 +60,23 @@ model Customer {
   bonusBalance  Decimal  @default(0)
 }
 
+// --- QORA RO'YXAT BUYURTMALARI ---
+model BlacklistRequest {
+  id            Int      @id @default(autoincrement())
+  
+  customerId    Int
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  type          String   // "ADD" (Qo'shish) yoki "REMOVE" (Chiqarish)
+  reason        String   // Sababi
+  
+  requesterName String   // So'rov yuborgan xodim
+  approverName  String?  // Tasdiqlagan direktor
+  
+  status        String   @default("Jarayonda") // "Jarayonda", "Yuborildi", "Tasdiqlandi", "Bekor qilindi"
+  createdAt     DateTime @default(now())
+}
+
 model CustomerDocument {
   id           Int      @id @default(autoincrement())
   customerId   Int      @unique
