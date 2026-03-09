@@ -452,6 +452,130 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// --- FAKTURALAR (INVOICES) API ---
+// ==========================================
+
+// 1. Barcha fakturalarni olish (Hammaga ko'rinadi)
+app.get('/api/invoices', authenticateToken, async (req, res) => {
+  try {
+    const invoices = await prisma.supplierInvoice.findMany({
+      include: { items: true },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(invoices);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Fakturalarni olishda xatolik" });
+  }
+});
+
+// 2. Yangi faktura yaratish
+app.post('/api/invoices', authenticateToken, async (req, res) => {
+  try {
+    const { date, supplier, invoiceNumber, exchangeRate, totalSum, status, userName, items } = req.body;
+    
+    const newInvoice = await prisma.supplierInvoice.create({
+      data: {
+        date: new Date(date),
+        supplierName: supplier,
+        invoiceNumber: invoiceNumber,
+        exchangeRate: Number(exchangeRate),
+        totalSum: Number(totalSum),
+        status: status || 'Jarayonda',
+        userName: userName,
+        items: {
+          create: items.map(item => ({
+            productId: item.id,
+            customId: Number(item.customId),
+            name: item.name,
+            count: Number(item.count),
+            price: Number(item.price),
+            salePrice: Number(item.salePrice),
+            currency: item.currency,
+            markup: Number(item.markup || 0),
+            total: Number(item.total)
+          }))
+        }
+      },
+      include: { items: true }
+    });
+    res.json(newInvoice);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Faktura saqlashda xatolik" });
+  }
+});
+
+// 3. Fakturani tahrirlash (Edit)
+app.put('/api/invoices/:id', authenticateToken, async (req, res) => {
+  try {
+    const { date, supplier, invoiceNumber, exchangeRate, totalSum, status, items } = req.body;
+    const invoiceId = Number(req.params.id);
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Asosiy fakturani yangilash
+      await tx.supplierInvoice.update({
+        where: { id: invoiceId },
+        data: {
+          date: new Date(date),
+          supplierName: supplier,
+          invoiceNumber: invoiceNumber,
+          exchangeRate: Number(exchangeRate),
+          totalSum: Number(totalSum),
+          status: status
+        }
+      });
+
+      // 2. Ichidagi eski tovarlarni o'chirib, yangilarini yozish (Eng xavfsiz usul)
+      await tx.supplierInvoiceItem.deleteMany({ where: { supplierInvoiceId: invoiceId } });
+      
+      await tx.supplierInvoiceItem.createMany({
+        data: items.map(item => ({
+            supplierInvoiceId: invoiceId,
+            productId: item.id || item.productId, 
+            customId: Number(item.customId),
+            name: item.name,
+            count: Number(item.count),
+            price: Number(item.price),
+            salePrice: Number(item.salePrice),
+            currency: item.currency,
+            markup: Number(item.markup || 0),
+            total: Number(item.total)
+        }))
+      });
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Tahrirlashda xatolik yuz berdi" });
+  }
+});
+
+// 4. Faktura holatini o'zgartirish (Masalan: Jarayonda -> Tasdiqlandi)
+app.patch('/api/invoices/:id/status', authenticateToken, async (req, res) => {
+    try {
+        await prisma.supplierInvoice.update({
+            where: { id: Number(req.params.id) },
+            data: { status: req.body.status }
+        });
+        res.json({ success: true });
+    } catch(e) {
+        res.status(500).json({ error: "Holatni o'zgartirishda xatolik" });
+    }
+});
+
+// 5. Fakturani butunlay o'chirish
+app.delete('/api/invoices/:id', authenticateToken, async (req, res) => {
+  try {
+    await prisma.supplierInvoice.delete({ where: { id: Number(req.params.id) }});
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: "O'chirishda xatolik" });
+  }
+});
+
 // --- CATEGORY ROUTES ---
 
 // 1. Get all categories
@@ -960,6 +1084,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
