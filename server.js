@@ -445,6 +445,75 @@ app.get('/api/customers', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// --- QORA RO'YXAT (BLACKLIST) API ---
+// ==========================================
+
+// 1. Qora ro'yxat buyurtmalarini olish
+app.get('/api/blacklist-requests', authenticateToken, async (req, res) => {
+    try {
+        const requests = await prisma.blacklistRequest.findMany({
+            include: { customer: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        res.json(requests);
+    } catch (error) {
+        res.status(500).json({ error: "Buyurtmalarni yuklashda xato" });
+    }
+});
+
+// 2. Yangi buyurtma yaratish
+app.post('/api/blacklist-requests', authenticateToken, async (req, res) => {
+    try {
+        const { customerId, type, reason, requesterName } = req.body;
+        const newReq = await prisma.blacklistRequest.create({
+            data: { customerId: Number(customerId), type, reason, requesterName }
+        });
+        res.json(newReq);
+    } catch (error) {
+        res.status(500).json({ error: "Yaratishda xato" });
+    }
+});
+
+// 3. Statusni o'zgartirish va Tasdiqlash (Eng asosiy logika)
+app.patch('/api/blacklist-requests/:id/status', authenticateToken, async (req, res) => {
+    try {
+        const { status, approverName } = req.body;
+        const reqId = Number(req.params.id);
+
+        const request = await prisma.blacklistRequest.findUnique({ where: { id: reqId } });
+        if (!request) return res.status(404).json({ error: "Topilmadi" });
+
+        // 1. Statusni o'zgartiramiz
+        await prisma.blacklistRequest.update({
+            where: { id: reqId },
+            data: { status, approverName: approverName || null }
+        });
+
+        // 2. Agar "Tasdiqlandi" bo'lsa, Mijozning (Customer) statusini ham o'zgartiramiz!
+        if (status === 'Tasdiqlandi') {
+            await prisma.customer.update({
+                where: { id: request.customerId },
+                data: { isBlacklisted: request.type === 'ADD' ? true : false } // ADD bo'lsa qora ro'yxatga kiradi, REMOVE bo'lsa chiqadi
+            });
+        }
+
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Xatolik yuz berdi" });
+    }
+});
+
+// 4. Buyurtmani o'chirish (Faqat "Jarayonda" bo'lsa)
+app.delete('/api/blacklist-requests/:id', authenticateToken, async (req, res) => {
+    try {
+        await prisma.blacklistRequest.delete({ where: { id: Number(req.params.id) } });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "O'chirishda xatolik" });
+    }
+});
+
 // --- DASHBOARD STATS ROUTE ---
 app.get('/api/dashboard', authenticateToken, async (req, res) => {
   try {
@@ -1110,6 +1179,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
