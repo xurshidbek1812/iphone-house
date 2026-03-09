@@ -340,6 +340,32 @@ app.post('/api/customers', authenticateToken, async (req, res) => {
   }
 });
 
+// 6. Mijozni butunlay o'chirish (DELETE)
+app.delete('/api/customers/:id', authenticateToken, async (req, res) => {
+  const customerId = Number(req.params.id);
+  try {
+    await prisma.$transaction(async (tx) => {
+      // 1. Mijozga tegishli barcha yordamchi ma'lumotlarni o'chiramiz (Tozalash)
+      await tx.customerDocument.deleteMany({ where: { customerId } });
+      await tx.customerAddress.deleteMany({ where: { customerId } });
+      await tx.customerPhone.deleteMany({ where: { customerId } });
+      await tx.customerJob.deleteMany({ where: { customerId } });
+
+      // 2. Va nihoyat asosiy mijoz profilini o'chiramiz
+      await tx.customer.delete({ where: { id: customerId } });
+    });
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Mijozni o'chirishda xatolik:", error);
+    // Himoya: Agar bu mijozga ulangan sotuv (Sale) yoki shartnoma (Contract) bo'lsa
+    if (error.code === 'P2003') {
+      return res.status(400).json({ error: "Bu mijozni o'chirib bo'lmaydi! Uning nomida savdo yoki shartnomalar mavjud." });
+    }
+    res.status(500).json({ error: "O'chirishda xatolik yuz berdi" });
+  }
+});
+
 // 2. Hududlarni olish
 app.get('/api/regions', authenticateToken, async (req, res) => {
   try {
@@ -1084,6 +1110,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
