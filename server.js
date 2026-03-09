@@ -686,6 +686,96 @@ app.delete('/api/invoices/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// --- SHARTNOMALAR (CONTRACTS) API ---
+// ==========================================
+
+// 1. Barcha shartnomalarni olish (Ro'yxat uchun)
+app.get('/api/contracts', authenticateToken, async (req, res) => {
+    try {
+        const contracts = await prisma.contract.findMany({
+            include: { 
+                customer: true, 
+                user: true 
+            },
+            orderBy: { id: 'desc' }
+        });
+        res.json(contracts);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Shartnomalarni olishda xatolik" });
+    }
+});
+
+// 2. Yangi shartnoma yaratish (Sotuv)
+app.post('/api/contracts', authenticateToken, async (req, res) => {
+    try {
+        const { customerId, staffId, durationMonths, totalAmount, prepayment, debtAmount, items } = req.body;
+        
+        const contract = await prisma.$transaction(async (tx) => {
+            // 1. Shartnoma yaratamiz
+            const newContract = await tx.contract.create({
+                data: {
+                    contractNumber: `SH-${Date.now().toString().slice(-6)}`,
+                    customerId: Number(customerId),
+                    userId: Number(staffId),
+                    totalAmount: Number(totalAmount),
+                    paidAmount: Number(prepayment),
+                    debtAmount: Number(debtAmount),
+                    durationMonths: Number(durationMonths),
+                    status: "ACTIVE"
+                }
+            });
+
+            // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
+            for (const item of items) {
+                await tx.contractItem.create({
+                    data: {
+                        contractId: newContract.id,
+                        productId: item.id,
+                        quantity: item.qty,
+                        price: Number(item.salePrice)
+                    }
+                });
+
+                // Ombordan minus qilish
+                await tx.product.update({
+                    where: { id: item.id },
+                    data: { quantity: { decrement: item.qty } }
+                });
+            }
+
+            // 3. Agar oldindan to'lov (Prepayment) bo'lsa, uni Kassaga (Transaction) yozamiz
+            if (Number(prepayment) > 0) {
+                await tx.payment.create({
+                    data: {
+                        contractId: newContract.id,
+                        amount: Number(prepayment),
+                        type: "CASH"
+                    }
+                });
+                
+                await tx.transaction.create({
+                    data: {
+                        amount: Number(prepayment),
+                        type: "INCOME",
+                        category: "Shartnoma to'lovi",
+                        description: `Shartnoma ${newContract.contractNumber} bo'yicha boshlang'ich to'lov`,
+                        userId: req.user.id
+                    }
+                });
+            }
+
+            return newContract;
+        });
+
+        res.json({ success: true, contract });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Shartnoma yaratishda xatolik yuz berdi" });
+    }
+});
+
 // --- CATEGORY ROUTES ---
 
 // 1. Get all categories
@@ -1194,6 +1284,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
