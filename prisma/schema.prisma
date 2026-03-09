@@ -157,7 +157,9 @@ model ProductBatch {
   
   buyPrice      Float    // Aynan shu partiyaning olingan narxi
   buyCurrency   String   @default("USD")
-  createdAt     DateTime @default(now()) 
+  createdAt     DateTime @default(now())
+  supplierName   String?
+  invoiceNumber  String? 
 
   // Tovar bilan bog'lanish
   productId     Int
