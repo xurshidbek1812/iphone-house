@@ -456,10 +456,15 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
 
 // 1. Get all categories
 app.get('/api/categories', authenticateToken, async (req, res) => {
-  const categories = await prisma.category.findMany({
-    include: { _count: { select: { products: true } } } 
-  });
-  res.json(categories);
+  try {
+    const categories = await prisma.category.findMany({
+        orderBy: { id: 'desc' } // Eng oxirgi qo'shilganlar birinchi chiqadi
+    });
+    res.json(categories);
+  } catch (error) {
+    console.error("Kategoriyalarni olishda xatolik:", error);
+    res.status(500).json({ error: "Server xatosi yuz berdi" });
+  }
 });
 
 // 2. Add a new category (MUKAMMAL VA HIMOYALANGAN HOLAT)
@@ -955,6 +960,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
