@@ -157,22 +157,46 @@ app.post('/api/users', authenticateToken, async (req, res) => {
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
+    const targetUserId = Number(id);
+    const tokenUserId = req.user.id;
+
+    // 1. XAVFSIZLIK: Faqat direktor Yoki o'z profilini o'zgartirayotgan xodimga ruxsat
+    if (req.user.role !== 'director' && tokenUserId !== targetUserId) {
+        return res.status(403).json({ message: "Siz faqat o'zingizning profilingizni o'zgartira olasiz!" });
+    }
+
     const { username, password, fullName, phone, role } = req.body;
     
-    const updateData = { username, fullName, phone, role };
+    // 2. Eski ma'lumotlarni topib olamiz (xato chiqmasligi uchun)
+    const existingUser = await prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!existingUser) {
+        return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+    }
+
+    // 3. Yangilanadigan ma'lumotlarni yig'amiz
+    const updateData = { 
+        username: username || existingUser.username, 
+        fullName: fullName || existingUser.fullName, 
+        phone: phone || existingUser.phone, 
+        // MUHIM: Rolni faqat direktor o'zgartira oladi, xodim o'ziga-o'zi direktorlikni bera olmaydi!
+        role: req.user.role === 'director' ? (role || existingUser.role) : existingUser.role 
+    };
     
-    // 🌟 PRO FIX: Agar parol o'zgartirilayotgan bo'lsa, uni ham shifrlaymiz
+    // 4. Agar parol kiritilgan bo'lsa, uni shifrlaymiz
     if (password) {
         updateData.password = await bcrypt.hash(password, 10);
     }
 
+    // 5. Bazaga saqlash
     const updatedUser = await prisma.user.update({
-      where: { id: Number(id) },
+      where: { id: targetUserId },
       data: updateData
     });
+    
     res.json(updatedUser);
   } catch (error) {
-    res.status(500).json({ message: "Yangilashda xato yuz berdi" });
+    console.error("Xodimni yangilashda xato:", error);
+    res.status(500).json({ message: "Yangilashda server xatosi yuz berdi" });
   }
 });
 
@@ -889,6 +913,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
