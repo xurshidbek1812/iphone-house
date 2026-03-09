@@ -989,6 +989,31 @@ app.post('/api/products', authenticateToken, async (req, res) => {
   }
 });
 
+// --- TOVARNI TAHRIRLASH (Faqat narx, kategoriya, birlik va nomini o'zgartirish) ---
+app.put('/api/products/:id', authenticateToken, async (req, res) => {
+    try {
+        const productId = Number(req.params.id);
+        const { name, category, unit, buyPrice, salePrice } = req.body;
+        
+        // Tovarning faqat ma'lumotlarini o'zgartiramiz, QOLDIQ (quantity) ga tegmaymiz!
+        const updatedProduct = await prisma.product.update({
+            where: { id: productId },
+            data: {
+                name: name,
+                category: category,
+                unit: unit,
+                buyPrice: Number(buyPrice),
+                salePrice: Number(salePrice)
+            }
+        });
+        
+        res.json({ success: true, product: updatedProduct });
+    } catch (error) {
+        console.error("Tovarni tahrirlashda xatolik:", error);
+        res.status(500).json({ error: "Tovarni tahrirlashda xatolik yuz berdi" });
+    }
+});
+
 // --- 2. TA'MINOTCHIDAN TOVAR QABUL QILISH (KIRIM) ---
 app.post('/api/products/:id/receive', authenticateToken, async (req, res) => {
     const productId = parseInt(req.params.id);
@@ -1358,3 +1383,4 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
