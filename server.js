@@ -776,6 +776,80 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
     }
 });
 
+// ==========================================
+// --- NAQD SAVDO (CASH SALES) API ---
+// ==========================================
+
+// 1. Barcha naqd savdolarni olish (Ro'yxat)
+app.get('/api/cash-sales', authenticateToken, async (req, res) => {
+    try {
+        const sales = await prisma.sale.findMany({
+            include: { customer: true, user: true, items: true },
+            orderBy: { id: 'desc' }
+        });
+        res.json(sales);
+    } catch (error) {
+        res.status(500).json({ error: "Naqd savdolarni olishda xatolik" });
+    }
+});
+
+// 2. Yangi naqd savdo yaratish (Sotish)
+app.post('/api/cash-sales', authenticateToken, async (req, res) => {
+    try {
+        const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
+        
+        const sale = await prisma.$transaction(async (tx) => {
+            // 1. Savdoni yaratamiz (Agar anonim bo'lsa customerId=null)
+            const newSale = await tx.sale.create({
+                data: {
+                    totalAmount: Number(totalAmount),
+                    customerId: isAnonymous ? null : Number(customerId),
+                    userId: req.user.id,
+                    // Anonim xaridor uchun eslatmaga yozib qo'yamiz (Kassa yopilganda bilish uchun)
+                    otherName: isAnonymous ? otherName : null,
+                    otherPhone: isAnonymous ? otherPhone : null
+                }
+            });
+
+            // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
+            for (const item of items) {
+                await tx.saleItem.create({
+                    data: {
+                        saleId: newSale.id,
+                        productId: item.id,
+                        quantity: item.qty,
+                        price: Number(item.salePrice)
+                    }
+                });
+
+                // Ombordan minus qilish
+                await tx.product.update({
+                    where: { id: item.id },
+                    data: { quantity: { decrement: item.qty } }
+                });
+            }
+
+            // 3. To'liq summa avtomatik Kassaga (Transaction) kirim bo'ladi
+            await tx.transaction.create({
+                data: {
+                    amount: Number(totalAmount),
+                    type: "INCOME",
+                    category: "Naqd Savdo",
+                    description: `Naqd savdo №${newSale.id} bo'yicha to'lov`,
+                    userId: req.user.id
+                }
+            });
+
+            return newSale;
+        });
+
+        res.json({ success: true, sale });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Naqd savdo saqlashda xatolik" });
+    }
+});
+
 // --- CATEGORY ROUTES ---
 
 // 1. Get all categories
@@ -1284,15 +1358,3 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
-
-
-
-
-
-
-
-
-
-
-
-
