@@ -340,6 +340,7 @@ app.post('/api/customers', authenticateToken, async (req, res) => {
   }
 });
 
+
 // 6. Mijozni butunlay o'chirish (DELETE)
 app.delete('/api/customers/:id', authenticateToken, async (req, res) => {
   const customerId = Number(req.params.id);
@@ -472,6 +473,20 @@ app.post('/api/blacklist-requests', authenticateToken, async (req, res) => {
         res.json(newReq);
     } catch (error) {
         res.status(500).json({ error: "Yaratishda xato" });
+    }
+});
+
+// 5. Qora ro'yxat buyurtmasi sababini tahrirlash (PUT)
+app.put('/api/blacklist-requests/:id', authenticateToken, async (req, res) => {
+    try {
+        const { reason } = req.body;
+        await prisma.blacklistRequest.update({
+            where: { id: Number(req.params.id) },
+            data: { reason: reason }
+        });
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: "Tahrirlashda xatolik yuz berdi" });
     }
 });
 
@@ -1179,6 +1194,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
