@@ -287,3 +287,34 @@ model InventoryItem {
   countedQty     Float        // Sanalgan haqiqiy son
   diff           Float        // Farq
 }
+
+// --- 8. TA'MINOTCHI FAKTURALARI (KIRIM/CHIQIM TARIXI UCHUN) ---
+model SupplierInvoice {
+  id            Int                   @id @default(autoincrement())
+  invoiceNumber String                
+  date          DateTime              @default(now())
+  supplierName  String
+  totalSum      Decimal               @default(0)
+  exchangeRate  Decimal               @default(12500)
+  status        String                @default("Jarayonda") // "Jarayonda", "Yuborildi", "Tasdiqlandi"
+  userName      String                // Fakturani kim kiritgani
+  
+  items         SupplierInvoiceItem[]
+  createdAt     DateTime              @default(now())
+}
+
+model SupplierInvoiceItem {
+  id                Int             @id @default(autoincrement())
+  supplierInvoiceId Int
+  invoice           SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
+  
+  productId         Int
+  customId          Int
+  name              String
+  count             Float
+  price             Decimal         // Kirim narxi
+  salePrice         Decimal         // Sotuv narxi
+  currency          String          @default("UZS")
+  markup            Float?          // Ustama foizi
+  total             Decimal         // Jami summa
+}
