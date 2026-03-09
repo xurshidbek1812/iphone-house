@@ -168,6 +168,12 @@ model ProductBatch {
   isArchived    Boolean  @default(false)
 }
 
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
 // --- 5. SALES (NAQD SAVDO) ---
 model Sale {
   id          Int      @id @default(autoincrement())
