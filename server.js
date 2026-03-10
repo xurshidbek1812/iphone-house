@@ -749,14 +749,12 @@ app.get('/api/contracts', authenticateToken, async (req, res) => {
     try {
         const contracts = await prisma.contract.findMany({
             include: { 
-                customer: {
-                    include: { phones: true } // Mijozning telefon raqamlarini ham olamiz
-                }, 
+                customer: { include: { phones: true } }, 
                 user: true,
-                items: {
-                    include: { product: true } // Shartnoma ichidagi tovarlar va ularning nomlari
-                },
-                payments: true // Shu paytgacha qilingan barcha to'lovlar
+                items: { include: { product: true } },
+                payments: { orderBy: { date: 'desc' } },
+                schedules: { orderBy: { monthNumber: 'asc' } }, // 🚨 GRAFIKLAR
+                comments: { orderBy: { createdAt: 'desc' } }    // 🚨 IZOHLAR
             },
             orderBy: { id: 'desc' }
         });
@@ -767,6 +765,30 @@ app.get('/api/contracts', authenticateToken, async (req, res) => {
     }
 });
 
+// 2. Shartnomaga yangi izoh qo'shish (YANGI API)
+app.post('/api/contracts/:id/comments', authenticateToken, async (req, res) => {
+    try {
+        const contractId = Number(req.params.id);
+        const { text } = req.body;
+
+        if (!text || text.trim() === '') {
+            return res.status(400).json({ error: "Izoh matni bo'sh bo'lishi mumkin emas!" });
+        }
+
+        const comment = await prisma.contractComment.create({
+            data: {
+                contractId: contractId,
+                authorName: req.user.fullName || "Hodim", // Token orqali yozuvchining ismini olamiz
+                text: text.trim()
+            }
+        });
+
+        res.json({ success: true, comment });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Izoh qo'shishda xatolik yuz berdi" });
+    }
+});
 // 2. Yangi shartnoma yaratish (Sotuv)
 app.post('/api/contracts', authenticateToken, async (req, res) => {
     try {
@@ -1667,6 +1689,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
