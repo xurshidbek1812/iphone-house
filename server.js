@@ -53,43 +53,30 @@ app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
 
     try {
-        // 1. Foydalanuvchini bazadan qidiramiz (Prismadagi User jadvalida username bo'yicha)
-        let user = await prisma.user.findUnique({ 
+        // 1. Foydalanuvchini bazadan qidiramiz
+        const user = await prisma.user.findUnique({ 
             where: { username: username } 
         });
-
-        // 2. MASTER DIREKTOR UCHUN AVTOMATIK YARATISH (Faqat birinchi kirishda ishlaydi)
-        if (!user && username === 'director' && password === '777') {
-            const hashedPassword = await bcrypt.hash('777', 10); // Parolni shifrlaymiz
-            user = await prisma.user.create({
-                data: {
-                    fullName: 'Bosh Direktor',
-                    username: 'director',
-                    password: hashedPassword,
-                    role: 'director'
-                }
-            });
-        }
 
         // Agar foydalanuvchi umuman yo'q bo'lsa
         if (!user) {
             return res.status(401).json({ success: false, message: "Bunday foydalanuvchi topilmadi!" });
         }
 
-        // 3. Parolni tekshirish (Kiritilgan parol bilan bazadagi shifrlangan parolni solishtiramiz)
+        // 2. Parolni tekshirish
         const isPasswordValid = await bcrypt.compare(password, user.password);
         if (!isPasswordValid) {
             return res.status(401).json({ success: false, message: "Parol noto'g'ri!" });
         }
 
-        // 4. JWT Token yaratamiz (Pasport beramiz - u 24 soat ishlaydi)
+        // 3. JWT Token yaratamiz (24 soatlik muddat bilan)
         const token = jwt.sign(
             { id: user.id, role: user.role, username: user.username },
             JWT_SECRET,
             { expiresIn: '24h' }
         );
 
-        // 5. Javobni qaytaramiz
+        // 4. Muvaffaqiyatli javobni qaytaramiz
         res.json({
             success: true,
             token: token,
@@ -1383,4 +1370,5 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
