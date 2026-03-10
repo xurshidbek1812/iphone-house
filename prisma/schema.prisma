@@ -203,6 +203,8 @@ model Sale {
   userId      Int      
   user        User     @relation(fields: [userId], references: [id])
 
+  status      String   @default("JARAYONDA")
+
   otherName   String?
   otherPhone  String?
 
