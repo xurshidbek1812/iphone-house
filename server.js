@@ -104,15 +104,22 @@ app.get('/', (req, res) => {
 // XODIMLAR (USERS) UCHUN API SO'ROVLARI
 // ==========================================
 
-// 1. Barcha xodimlarni ko'rish
+// 1. Barcha xodimlarni ko'rish (FAQAT DIREKTOR UCHUN)
 app.get('/api/users', authenticateToken, async (req, res) => {
+  // 🚨 HIMOYA: Faqat direktor barcha xodimlar ro'yxatini ko'ra oladi!
+  if (req.user.role !== 'director') {
+      return res.status(403).json({ message: "Sizda xodimlar ro'yxatini ko'rish huquqi yo'q!" });
+  }
+
   try {
     const users = await prisma.user.findMany({ 
         orderBy: { id: 'desc' },
         select: { id: true, username: true, fullName: true, role: true, phone: true } 
     });
     res.json(users);
-  } catch (error) { res.status(500).json({ message: "Xodimlarni yuklashda xato" }); }
+  } catch (error) { 
+      res.status(500).json({ message: "Xodimlarni yuklashda xato" }); 
+  }
 });
 
 // --- O'Z PROFILINI OLISH UCHUN ---
@@ -153,7 +160,7 @@ app.post('/api/users', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. Xodimni tahrirlash (LOGIN BANDLIGINI TEKSHIRISH + PAROL YASHIRILDI)
+// 3. Xodimni tahrirlash (LOGIN BANDLIGI + JORIY PAROLNI TEKSHIRISH + PAROL YASHIRILDI)
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
   try {
     const targetUserId = Number(req.params.id);
@@ -163,7 +170,7 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
         return res.status(403).json({ message: "Siz faqat o'zingizning profilingizni o'zgartira olasiz!" });
     }
 
-    const { username, password, fullName, phone, role } = req.body;
+    const { username, password, currentPassword, fullName, phone, role } = req.body;
     
     // HIMOYA: Agar usernameni o'zgartirayotgan bo'lsa, boshqasida yo'qligini tekshiramiz
     if (username) {
@@ -181,7 +188,21 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
         role: req.user.role === 'director' ? (role || existingUser.role) : existingUser.role 
     };
     
-    if (password) updateData.password = await bcrypt.hash(password, 10);
+    // HIMOYA: Parolni o'zgartirish logikasi
+    if (password) {
+        // Agar xodim (yoki direktor) O'ZINING parolini o'zgartirayotgan bo'lsa:
+        if (tokenUserId === targetUserId) {
+            if (!currentPassword) {
+                return res.status(400).json({ message: "Parolni o'zgartirish uchun joriy (eski) parolni kiritishingiz shart!" });
+            }
+            const isMatch = await bcrypt.compare(currentPassword, existingUser.password);
+            if (!isMatch) {
+                return res.status(400).json({ message: "Joriy parol noto'g'ri kiritildi!" });
+            }
+        }
+        // Agar tekshiruvlardan o'tsa yoki Direktor boshqa odamning parolini tiklayotgan bo'lsa:
+        updateData.password = await bcrypt.hash(password, 10);
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: targetUserId },
@@ -837,17 +858,23 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
 
             // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
+                // 🚨 YANGI QO'SHILGAN HIMOYA: Faqat 0 dan katta, to'g'ri son qabul qilinadi
+                const qty = Number(item.qty);
+                if (isNaN(qty) || qty <= 0) {
+                    throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi (0 dan katta bo'lishi shart)!`);
+                }
+
                 // HIMOYA: Tovar qoldig'ini tekshiramiz
                 const currentProd = await tx.product.findUnique({ where: { id: item.id } });
-                if (!currentProd || currentProd.quantity < item.qty) {
+                if (!currentProd || currentProd.quantity < qty) {
                     throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
                 }
 
-                await tx.saleItem.create({ // contract bo'lsa contractItem.create bo'ladi
+                await tx.saleItem.create({ 
                     data: {
-                        saleId: newSale.id, // contract bo'lsa contractId: newContract.id
+                        saleId: newSale.id, 
                         productId: item.id,
-                        quantity: item.qty,
+                        quantity: qty,
                         price: Number(item.salePrice)
                     }
                 });
@@ -855,7 +882,7 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
                 // Ombordan minus qilish
                 await tx.product.update({
                     where: { id: item.id },
-                    data: { quantity: { decrement: item.qty } }
+                    data: { quantity: { decrement: qty } }
                 });
             }
 
@@ -877,7 +904,8 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error("Naqd savdo xatosi:", error);
         
-        if (error.message.includes("yetarli qoldiq yo'q")) {
+        // Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni mijozga ko'rsatamiz
+        if (error.message.startsWith("Xato:")) {
             return res.status(400).json({ error: error.message });
         }
 
@@ -1213,6 +1241,11 @@ app.put('/api/customers/:id', authenticateToken, async (req, res) => {
 app.post('/api/products/increase-stock', authenticateToken, async (req, res) => {
   const items = req.body;
 
+  // 1-HIMOYA: items ro'yxat ekanligini va bo'sh emasligini tekshiramiz
+  if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Qo'shish uchun tovarlar ro'yxati kiritilmadi!" });
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       for (const item of items) {
@@ -1220,16 +1253,27 @@ app.post('/api/products/increase-stock', authenticateToken, async (req, res) => 
         const addedQty = Number(item.quantity || item.count || item.inputQty);
         const productId = Number(item.id);
 
+        // 2-HIMOYA: Soni 0 dan katta va aniq raqam ekanligini tekshiramiz
+        if (isNaN(addedQty) || addedQty <= 0) {
+            throw new Error(`Xato: Tovar soni noto'g'ri kiritildi (0 dan katta bo'lishi shart)!`);
+        }
+
         const currentProduct = await tx.product.findUnique({
             where: { id: productId }
         });
 
         if (!currentProduct) {
-            throw new Error(`Bazada ID: ${productId} bo'lgan tovar topilmadi`);
+            throw new Error(`Xato: Bazada ID: ${productId} bo'lgan tovar topilmadi!`);
         }
 
         const price = Number(item.buyPrice || item.price || item.inputPrice || currentProduct.buyPrice);
         const salePrice = Number(item.salePrice || item.inputSalePrice || currentProduct.salePrice);
+        
+        // 3-HIMOYA: Narxlar aniq raqam ekanligini va manfiy emasligini tekshiramiz
+        if (isNaN(price) || price < 0 || isNaN(salePrice) || salePrice < 0) {
+            throw new Error(`Xato: ${currentProduct.name} tovarining narxlari noto'g'ri kiritildi!`);
+        }
+
         const currency = item.buyCurrency || item.currency || item.inputCurrency || currentProduct.buyCurrency || 'UZS';
 
         await tx.productBatch.create({
@@ -1258,6 +1302,12 @@ app.post('/api/products/increase-stock', authenticateToken, async (req, res) => 
     res.json({ success: true });
   } catch (error) {
     console.error("❌ OMBOR KIRIM XATOSI:", error);
+    
+    // Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni frontendga aniq qilib yuboramiz
+    if (error.message.startsWith("Xato:")) {
+        return res.status(400).json({ error: error.message });
+    }
+
     res.status(500).json({ error: "Ombor yangilanmadi" });
   }
 });
@@ -1281,33 +1331,78 @@ app.patch('/api/products/batches/:id/archive', authenticateToken, async (req, re
 app.post('/api/products/decrease-stock', authenticateToken, async (req, res) => {
     const items = req.body;
 
+    // 1-HIMOYA: items ro'yxat ekanligini va bo'sh emasligini tekshiramiz
+    if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: "Kamaytirish uchun tovarlar ro'yxati kiritilmadi!" });
+    }
+
     try {
         await prisma.$transaction(async (tx) => {
             for (const item of items) {
                 const qtyToDecrease = Number(item.inputQty);
                 const productId = Number(item.id);
 
+                // 2-HIMOYA: Soni 0 dan katta va aniq raqam ekanligini tekshiramiz
+                if (isNaN(qtyToDecrease) || qtyToDecrease <= 0) {
+                    throw new Error(`Xato: Tovar soni noto'g'ri kiritildi (0 dan katta bo'lishi shart)!`);
+                }
+
+                // 3-HIMOYA: Tovar bazada borligi va umumiy qoldiq yetarliligini tekshirish
+                const currentProduct = await tx.product.findUnique({
+                    where: { id: productId }
+                });
+
+                if (!currentProduct) {
+                    throw new Error(`Xato: Bazada ID: ${productId} bo'lgan tovar topilmadi!`);
+                }
+
+                if (currentProduct.quantity < qtyToDecrease) {
+                    throw new Error(`Xato: ${currentProduct.name} tovaridan omborda yetarli qoldiq yo'q!`);
+                }
+
+                // 4-HIMOYA: Agar partiyadan (batch) ayirilayotgan bo'lsa, partiya qoldig'ini ham tekshirish
+                if (item.batchId && !String(item.batchId).startsWith('old-')) {
+                    const batchId = Number(item.batchId);
+                    const currentBatch = await tx.productBatch.findUnique({
+                        where: { id: batchId }
+                    });
+
+                    if (!currentBatch) {
+                        throw new Error(`Xato: Bazada tanlangan partiya topilmadi!`);
+                    }
+
+                    if (currentBatch.quantity < qtyToDecrease) {
+                        throw new Error(`Xato: ${currentProduct.name} ning tanlangan partiyasida yetarli qoldiq yo'q!`);
+                    }
+
+                    // Partiyadan ayirish
+                    await tx.productBatch.update({
+                        where: { id: batchId },
+                        data: {
+                            quantity: { decrement: qtyToDecrease }
+                        }
+                    });
+                }
+
+                // Asosiy tovardan ayirish
                 await tx.product.update({
                     where: { id: productId },
                     data: {
                         quantity: { decrement: qtyToDecrease }
                     }
                 });
-
-                if (item.batchId && !String(item.batchId).startsWith('old-')) {
-                    await tx.productBatch.update({
-                        where: { id: Number(item.batchId) },
-                        data: {
-                            quantity: { decrement: qtyToDecrease }
-                        }
-                    });
-                }
             }
         });
 
         res.json({ success: true, message: "Tovarlar ombordan ayirildi" });
     } catch (error) {
         console.error("❌ QAYTIM XATOSI:", error);
+        
+        // 5-HIMOYA: Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni frontendga aniq qilib yuboramiz
+        if (error.message.startsWith("Xato:")) {
+            return res.status(400).json({ error: error.message });
+        }
+
         res.status(500).json({ error: "Ombor yangilanmadi", details: error.message });
     }
 });
@@ -1418,5 +1513,6 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
