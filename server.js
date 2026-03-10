@@ -867,7 +867,7 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 // --- NAQD SAVDO (CASH SALES) API ---
 // ==========================================
 
-// 1. Barcha naqd savdolarni olish (Ro'yxat)
+// 1. Barcha naqd savdolarni olish
 app.get('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
         const sales = await prisma.sale.findMany({
@@ -880,78 +880,47 @@ app.get('/api/cash-sales', authenticateToken, async (req, res) => {
     }
 });
 
-// 2. Yangi naqd savdo yaratish (Sotish)
+// 2. Yangi naqd savdo yaratish (FAQAT SAQLASH - JARAYONDA)
 app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
         const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
         
-        // 1-HIMOYA: items ro'yxat ekanligini va bo'sh emasligini tekshiramiz
         if (!Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ error: "Savat bo'sh! Savdoga tovar kiritilmadi." });
         }
 
         const sale = await prisma.$transaction(async (tx) => {
-            // 1. Savdoni yaratamiz (Agar anonim bo'lsa customerId=null)
             const newSale = await tx.sale.create({
                 data: {
                     totalAmount: Number(totalAmount),
                     customerId: isAnonymous ? null : Number(customerId),
                     userId: req.user.id,
                     otherName: isAnonymous ? otherName : null,
-                    otherPhone: isAnonymous ? otherPhone : null
+                    otherPhone: isAnonymous ? otherPhone : null,
+                    status: "JARAYONDA" // 🚨 Boshlang'ich holat - OMBORDAN AYIRILMAYDI
                 }
             });
 
-            // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
-                // 2-HIMOYA: Soni 0 dan katta va aniq raqam ekanligini tekshiramiz
                 const qty = Number(item.qty);
-                if (isNaN(qty) || qty <= 0) {
-                    throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi!`);
-                }
-
-                // 3-HIMOYA: Narx to'g'riligi va manfiy emasligini tekshiramiz
                 const salePrice = Number(item.salePrice);
-                if (isNaN(salePrice) || salePrice < 0) {
-                    throw new Error(`Xato: ${item.name} tovarining narxi noto'g'ri kiritilgan!`);
-                }
-
-                // 4-HIMOYA: Tovar qoldig'ini tekshiramiz
-                const currentProd = await tx.product.findUnique({ where: { id: item.id } });
                 
-                if (!currentProd) {
-                     throw new Error(`Xato: Bazada ID: ${item.id} bo'lgan tovar topilmadi!`);
-                }
-                if (currentProd.quantity < qty) {
-                    throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
-                }
+                if (isNaN(qty) || qty <= 0) throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi!`);
+                if (isNaN(salePrice) || salePrice < 0) throw new Error(`Xato: ${item.name} tovarining narxi noto'g'ri!`);
+
+                const currentProd = await tx.product.findUnique({ where: { id: item.id } });
+                if (!currentProd) throw new Error(`Xato: Bazada ID: ${item.id} bo'lgan tovar topilmadi!`);
+                if (currentProd.quantity < qty) throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
 
                 await tx.saleItem.create({ 
                     data: {
                         saleId: newSale.id, 
                         productId: item.id,
                         quantity: qty,
-                        price: salePrice // TO'G'RILANGAN QISM
+                        price: salePrice 
                     }
                 });
-
-                // Ombordan minus qilish
-                await tx.product.update({
-                    where: { id: item.id },
-                    data: { quantity: { decrement: qty } }
-                });
             }
-
-            // 3. To'liq summa avtomatik Kassaga (Transaction) kirim bo'ladi
-            await tx.transaction.create({
-                data: {
-                    amount: Number(totalAmount),
-                    type: "INCOME",
-                    category: "Naqd Savdo",
-                    description: `Naqd savdo №${newSale.id} bo'yicha to'lov`,
-                    userId: req.user.id
-                }
-            });
 
             return newSale;
         });
@@ -959,13 +928,121 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
         res.json({ success: true, sale });
     } catch (error) {
         console.error("Naqd savdo xatosi:", error);
-        
-        // Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni mijozga ko'rsatamiz
-        if (error.message.startsWith("Xato:")) {
-            return res.status(400).json({ error: error.message });
-        }
-
+        if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
         res.status(500).json({ error: "Naqd savdo saqlashda xatolik yuz berdi" });
+    }
+});
+
+// 3. Savdoni tahrirlash (Agar hali tasdiqlanmagan bo'lsa)
+app.put('/api/cash-sales/:id', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
+        
+        const existingSale = await prisma.sale.findUnique({ where: { id: saleId } });
+        if (!existingSale) return res.status(404).json({ error: "Savdo topilmadi!" });
+        if (existingSale.status === "TASDIQLANDI") return res.status(400).json({ error: "Tasdiqlangan savdoni tahrirlab bo'lmaydi!" });
+
+        await prisma.$transaction(async (tx) => {
+            // Asosiy ma'lumotlarni yangilash
+            await tx.sale.update({
+                where: { id: saleId },
+                data: {
+                    totalAmount: Number(totalAmount),
+                    customerId: isAnonymous ? null : Number(customerId),
+                    otherName: isAnonymous ? otherName : null,
+                    otherPhone: isAnonymous ? otherPhone : null
+                }
+            });
+
+            // Eski tovarlarni o'chirib, yangilarini yozamiz
+            await tx.saleItem.deleteMany({ where: { saleId } });
+
+            for (const item of items) {
+                await tx.saleItem.create({
+                    data: {
+                        saleId,
+                        productId: item.id,
+                        quantity: Number(item.qty),
+                        price: Number(item.salePrice)
+                    }
+                });
+            }
+        });
+
+        res.json({ success: true, message: "Savdo muvaffaqiyatli tahrirlandi" });
+    } catch (error) {
+        res.status(500).json({ error: "Tahrirlashda xatolik" });
+    }
+});
+
+// 4. Savdoni Tasdiqlash (PUL TUSHADI VA TOVAR OMBORDAN KETADI)
+app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        
+        const sale = await prisma.sale.findUnique({ 
+            where: { id: saleId },
+            include: { items: true }
+        });
+
+        if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
+        if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Bu savdo allaqachon tasdiqlangan!" });
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Statusni o'zgartiramiz
+            await tx.sale.update({
+                where: { id: saleId },
+                data: { status: "TASDIQLANDI" }
+            });
+
+            // 2. Ombordan tovarlarni ayiramiz
+            for (const item of sale.items) {
+                const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
+                if (!currentProd || currentProd.quantity < item.quantity) {
+                    throw new Error(`Xato: Omborda tovar qoldig'i yetarli emas!`);
+                }
+                
+                await tx.product.update({
+                    where: { id: item.productId },
+                    data: { quantity: { decrement: item.quantity } }
+                });
+            }
+
+            // 3. Kassaga pulni kirim qilamiz
+            await tx.transaction.create({
+                data: {
+                    amount: sale.totalAmount,
+                    type: "INCOME",
+                    category: "Naqd Savdo",
+                    description: `Naqd savdo №${sale.id} bo'yicha to'lov`,
+                    userId: req.user.id
+                }
+            });
+        });
+
+        res.json({ success: true, message: "Savdo tasdiqlandi, tovarlar ombordan yechildi va kassaga pul tushdi!" });
+    } catch (error) {
+        if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
+        res.status(500).json({ error: "Tasdiqlashda xatolik yuz berdi" });
+    }
+});
+
+// 5. Savdoni O'chirish (Agar Jarayonda bo'lsa)
+app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+        
+        if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
+        if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Tasdiqlangan savdoni o'chirib bo'lmaydi!" });
+
+        await prisma.saleItem.deleteMany({ where: { saleId } });
+        await prisma.sale.delete({ where: { id: saleId } });
+
+        res.json({ success: true, message: "Savdo o'chirildi" });
+    } catch (error) {
+        res.status(500).json({ error: "O'chirishda xatolik yuz berdi" });
     }
 });
 // --- CATEGORY ROUTES ---
@@ -1582,6 +1659,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
