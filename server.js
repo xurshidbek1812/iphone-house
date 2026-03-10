@@ -880,6 +880,11 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
         const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
         
+        // 1-HIMOYA: items ro'yxat ekanligini va bo'sh emasligini tekshiramiz
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ error: "Savat bo'sh! Savdoga tovar kiritilmadi." });
+        }
+
         const sale = await prisma.$transaction(async (tx) => {
             // 1. Savdoni yaratamiz (Agar anonim bo'lsa customerId=null)
             const newSale = await tx.sale.create({
@@ -887,7 +892,6 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
                     totalAmount: Number(totalAmount),
                     customerId: isAnonymous ? null : Number(customerId),
                     userId: req.user.id,
-                    // Anonim xaridor uchun eslatmaga yozib qo'yamiz (Kassa yopilganda bilish uchun)
                     otherName: isAnonymous ? otherName : null,
                     otherPhone: isAnonymous ? otherPhone : null
                 }
@@ -895,15 +899,25 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
 
             // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
-                // 🚨 YANGI QO'SHILGAN HIMOYA: Faqat 0 dan katta, to'g'ri son qabul qilinadi
+                // 2-HIMOYA: Soni 0 dan katta va aniq raqam ekanligini tekshiramiz
                 const qty = Number(item.qty);
                 if (isNaN(qty) || qty <= 0) {
-                    throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi (0 dan katta bo'lishi shart)!`);
+                    throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi!`);
                 }
 
-                // HIMOYA: Tovar qoldig'ini tekshiramiz
+                // 3-HIMOYA: Narx to'g'riligi va manfiy emasligini tekshiramiz
+                const salePrice = Number(item.salePrice);
+                if (isNaN(salePrice) || salePrice < 0) {
+                    throw new Error(`Xato: ${item.name} tovarining narxi noto'g'ri kiritilgan!`);
+                }
+
+                // 4-HIMOYA: Tovar qoldig'ini tekshiramiz
                 const currentProd = await tx.product.findUnique({ where: { id: item.id } });
-                if (!currentProd || currentProd.quantity < qty) {
+                
+                if (!currentProd) {
+                     throw new Error(`Xato: Bazada ID: ${item.id} bo'lgan tovar topilmadi!`);
+                }
+                if (currentProd.quantity < qty) {
                     throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
                 }
 
@@ -912,7 +926,7 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
                         saleId: newSale.id, 
                         productId: item.id,
                         quantity: qty,
-                        price: Number(item.salePrice)
+                        price: salePrice // TO'G'RILANGAN QISM
                     }
                 });
 
@@ -949,7 +963,6 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Naqd savdo saqlashda xatolik yuz berdi" });
     }
 });
-
 // --- CATEGORY ROUTES ---
 
 // 1. Get all categories
@@ -1550,6 +1563,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
