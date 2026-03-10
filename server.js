@@ -1056,12 +1056,11 @@ app.get('/api/products', authenticateToken, async (req, res) => {
   }
 });
 
-// --- 1. YANGI TOVAR QO'SHISH (1-Partiyasi bilan birga) ---
+// --- 1. YANGI TOVAR QO'SHISH (POST) ---
 app.post('/api/products', authenticateToken, async (req, res) => {
   try {
     const { customId, name, category, buyPrice, salePrice, quantity, unit, buyCurrency, saleCurrency } = req.body;
     
-    // --- VALIDATSIYA QISMI ---
     if (!name || !customId || !category) {
         return res.status(400).json({ error: "Majburiy maydonlar to'ldirilmadi!" });
     }
@@ -1069,27 +1068,16 @@ app.post('/api/products', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: "Narxlar faqat raqam bo'lishi shart!" });
     }
 
-    // 🚨 100% ISHONCHLI HIMOYA: Barcha tovarlar ro'yxatini olamiz va JS da tekshiramiz
-    const allProducts = await prisma.product.findMany({
-        select: { name: true }
-    });
-
-    const incomingName = name.trim().toLowerCase();
-    
-    // Agar bazadagi biror tovar nomi frontenddan kelayotgan nom bilan bir xil bo'lsa (kichik harflarga o'girilganda)
-    const isDuplicate = allProducts.some(p => p.name.trim().toLowerCase() === incomingName);
-
-    if (isDuplicate) {
-        return res.status(400).json({ error: "Bu nomdagi tovar bazada allaqachon mavjud!" });
-    }
-    
+    // 🚨 1-QADAM: Nomni normalizatsiya qilamiz (bo'shliqlarni tozalaymiz)
+    const normalizedName = normalizeProductName(name);
     const initialQty = Number(quantity) || 0;
 
     const product = await prisma.$transaction(async (tx) => {
         const newProd = await tx.product.create({
             data: {
                 customId: Number(customId),
-                name: name.trim(), // Asl ko'rinishida saqlaymiz (Masalan: iPhone 15 Pro)
+                name: name.trim(), 
+                normalizedName: normalizedName, // 🚨 BAZAGA SAQLASH
                 category,
                 buyPrice: Number(buyPrice),
                 salePrice: Number(salePrice),
@@ -1116,22 +1104,31 @@ app.post('/api/products', authenticateToken, async (req, res) => {
 
     res.status(201).json(product);
   } catch (error) {
-    console.error(error);
+    console.error("Tovar qo'shish xatosi:", error);
+    // 🚨 2-QADAM: PRISMA UNIQUE XATOSI (P2002) NI USHLASH
+    if (error.code === 'P2002') {
+        return res.status(400).json({ error: "Bu nomdagi tovar bazada allaqachon mavjud!" });
+    }
     res.status(500).json({ error: "Tovar qo'shishda xatolik yuz berdi" });
   }
 });
 
-// --- TOVARNI TAHRIRLASH (Faqat narx, kategoriya, birlik va nomini o'zgartirish) ---
+// --- TOVARNI TAHRIRLASH (PUT) ---
 app.put('/api/products/:id', authenticateToken, async (req, res) => {
     try {
         const productId = Number(req.params.id);
         const { name, category, unit, buyPrice, salePrice } = req.body;
         
-        // Tovarning faqat ma'lumotlarini o'zgartiramiz, QOLDIQ (quantity) ga tegmaymiz!
+        if (!name) return res.status(400).json({ error: "Tovar nomi bo'sh bo'lishi mumkin emas!" });
+
+        // Nomi normalizatsiya qilinadi
+        const normalizedName = normalizeProductName(name);
+        
         const updatedProduct = await prisma.product.update({
             where: { id: productId },
             data: {
-                name: name,
+                name: name.trim(),
+                normalizedName: normalizedName, // 🚨 TAHRIRLASHDAGI HIMOYA
                 category: category,
                 unit: unit,
                 buyPrice: Number(buyPrice),
@@ -1142,6 +1139,9 @@ app.put('/api/products/:id', authenticateToken, async (req, res) => {
         res.json({ success: true, product: updatedProduct });
     } catch (error) {
         console.error("Tovarni tahrirlashda xatolik:", error);
+        if (error.code === 'P2002') {
+            return res.status(400).json({ error: "Siz o'zgartirgan nomni boshqa tovar band qilgan!" });
+        }
         res.status(500).json({ error: "Tovarni tahrirlashda xatolik yuz berdi" });
     }
 });
@@ -1605,6 +1605,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
