@@ -516,13 +516,14 @@ app.delete('/api/blacklist-requests/:id', authenticateToken, async (req, res) =>
     }
 });
 
-// --- DASHBOARD STATS ROUTE ---
+// ==========================================
+// --- DASHBOARD API (YANGILANGAN) ---
+// ==========================================
 app.get('/api/dashboard', authenticateToken, async (req, res) => {
   try {
-    // 1. Calculate Total Inventory Value (Ombor) - TO'G'RILANDI
+    // 1. Calculate Total Inventory Value (Ombor)
     const products = await prisma.product.findMany();
     const inventoryValue = products.reduce((sum, item) => {
-      // stockQuantity o'rniga quantity, sellPrice o'rniga buyPrice
       return sum + ((item.quantity || 0) * Number(item.buyPrice || 0));
     }, 0);
 
@@ -537,18 +538,38 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
       _sum: { debtAmount: true }
     });
 
-    res.json({
+    const stats = {
       inventoryValue: inventoryValue || 0,
       totalIncome: income._sum.amount || 0,
       totalDebt: debt._sum.debtAmount || 0,
       productCount: products.length
+    };
+
+    // 4. HAQIQIY BILDIRISHNOMALAR (So'nggi savdolar / harakatlar)
+    const recentSales = await prisma.sale.findMany({
+        take: 10,
+        orderBy: { id: 'desc' },
+        include: { user: true, customer: true }
     });
+
+    const notifications = recentSales.map(sale => ({
+        id: sale.id,
+        type: 'Naqd Savdo',
+        supplier: sale.customer ? `${sale.customer.lastName} ${sale.customer.firstName}` : (sale.otherName || 'Anonim mijoz'),
+        sender: sale.user?.fullName || 'Xodim',
+        totalSum: sale.totalAmount,
+        date: sale.date.toLocaleString('uz-UZ'),
+        status: 'Yuborildi',
+        isRead: false
+    }));
+
+    // Ham statlarni, ham xabarlarni bitta json qilib jo'natamiz
+    res.json({ stats, notifications });
   } catch (error) {
-    console.error(error);
+    console.error("Dashboard xatosi:", error);
     res.status(500).json({ error: "Stats error" });
   }
 });
-
 // ==========================================
 // --- FAKTURALAR (INVOICES) API ---
 // ==========================================
@@ -1370,6 +1391,3 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
-
-
-
