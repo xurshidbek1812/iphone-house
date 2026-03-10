@@ -218,14 +218,25 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
 
 // 4. Xodimni o'chirish
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ message: "Sizda xodimlarni o'chirish huquqi yo'q!" });
-  
-  try { 
-      await prisma.user.delete({ where: { id: Number(req.params.id) } }); 
-      res.json({ success: true }); 
-  } catch (error) { 
-      res.status(500).json({ message: "Xato" }); 
-  }
+    // 1-HIMOYA: Faqat direktor o'chira oladi
+    if (req.user.role !== 'director') {
+        return res.status(403).json({ message: "Sizda xodimlarni o'chirish huquqi yo'q!" });
+    }
+
+    const targetUserId = Number(req.params.id);
+
+    // 2-HIMOYA: Direktor o'zini o'zi o'chirib yubormasligi kerak!
+    if (req.user.id === targetUserId) {
+        return res.status(400).json({ message: "Xatolik: Siz o'z hisobingizni o'chira olmaysiz!" });
+    }
+    
+    try { 
+        await prisma.user.delete({ where: { id: targetUserId } }); 
+        res.json({ success: true }); 
+    } catch (error) { 
+        console.error("Xodimni o'chirishda xato:", error);
+        res.status(500).json({ message: "O'chirishda xato yuz berdi" }); 
+    }
 });
 
 // ==========================================
@@ -750,6 +761,11 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
     try {
         const { customerId, staffId, durationMonths, totalAmount, prepayment, debtAmount, items } = req.body;
         
+        // 1-HIMOYA: items ro'yxat ekanligini va bo'sh emasligini tekshiramiz
+        if (!Array.isArray(items) || items.length === 0) {
+            return res.status(400).json({ error: "Shartnomaga tovarlar kiritilmadi!" });
+        }
+
         const contract = await prisma.$transaction(async (tx) => {
             // 1. Shartnoma yaratamiz
             const newContract = await tx.contract.create({
@@ -767,26 +783,41 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 
             // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
-                // HIMOYA: Tovar qoldig'ini tekshiramiz
+                // 🚨 2-HIMOYA: Soni 0 dan katta va aniq raqam ekanligini tekshiramiz
+                const qty = Number(item.qty);
+                if (isNaN(qty) || qty <= 0) {
+                    throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi (0 dan katta bo'lishi shart)!`);
+                }
+
+                // 3-HIMOYA: Narxlar to'g'ri ekanligini tekshiramiz
+                const salePrice = Number(item.salePrice);
+                if (isNaN(salePrice) || salePrice < 0) {
+                    throw new Error(`Xato: ${item.name} tovarining narxi noto'g'ri!`);
+                }
+
+                // 4-HIMOYA: Tovar qoldig'ini tekshiramiz
                 const currentProd = await tx.product.findUnique({ where: { id: item.id } });
-                if (!currentProd || currentProd.quantity < item.qty) {
+                if (!currentProd) {
+                    throw new Error(`Xato: Bazada ID: ${item.id} bo'lgan tovar topilmadi!`);
+                }
+
+                if (currentProd.quantity < qty) {
                     throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
                 }
 
-                // 🚨 TO'G'RILANGAN JOY: saleItem emas, contractItem bo'lishi kerak!
                 await tx.contractItem.create({ 
                     data: {
-                        contractId: newContract.id, // 🚨 newSale.id emas, newContract.id
+                        contractId: newContract.id,
                         productId: item.id,
-                        quantity: item.qty,
-                        price: Number(item.salePrice)
+                        quantity: qty,
+                        price: salePrice
                     }
                 });
 
                 // Ombordan minus qilish
                 await tx.product.update({
                     where: { id: item.id },
-                    data: { quantity: { decrement: item.qty } }
+                    data: { quantity: { decrement: qty } }
                 });
             }
 
@@ -816,7 +847,13 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 
         res.json({ success: true, contract });
     } catch (error) {
-        console.error(error);
+        console.error("Shartnoma xatosi:", error);
+        
+        // 5-HIMOYA: Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni mijozga ko'rsatamiz
+        if (error.message.startsWith("Xato:")) {
+            return res.status(400).json({ error: error.message });
+        }
+
         res.status(500).json({ error: "Shartnoma yaratishda xatolik yuz berdi" });
     }
 });
@@ -1513,6 +1550,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
