@@ -1063,6 +1063,20 @@ app.post('/api/products', authenticateToken, async (req, res) => {
     if (isNaN(Number(buyPrice)) || isNaN(Number(salePrice))) {
         return res.status(400).json({ error: "Narxlar faqat raqam bo'lishi shart!" });
     }
+
+    // 🚨 YANGI HIMOYA: Tovar nomi oldin qo'shilganligini tekshirish
+    const existingProduct = await prisma.product.findFirst({
+        where: {
+            name: {
+                equals: name.trim(), // bo'shliqlarni olib tashlab tekshiramiz
+                mode: 'insensitive'  // katta-kichik harflarni bir xil deb tushunadi (Masalan: "Iphone" = "iphone")
+            }
+        }
+    });
+
+    if (existingProduct) {
+        return res.status(400).json({ error: "Bu nomdagi tovar bazada allaqachon mavjud!" });
+    }
     
     const initialQty = Number(quantity) || 0;
 
@@ -1070,7 +1084,7 @@ app.post('/api/products', authenticateToken, async (req, res) => {
         const newProd = await tx.product.create({
             data: {
                 customId: Number(customId),
-                name,
+                name: name.trim(), // 🚨 Nomi doim toza bo'lib saqlanadi
                 category,
                 buyPrice: Number(buyPrice),
                 salePrice: Number(salePrice),
@@ -1101,7 +1115,6 @@ app.post('/api/products', authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Tovar qo'shishda xatolik yuz berdi" });
   }
 });
-
 // --- TOVARNI TAHRIRLASH (Faqat narx, kategoriya, birlik va nomini o'zgartirish) ---
 app.put('/api/products/:id', authenticateToken, async (req, res) => {
     try {
@@ -1563,6 +1576,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
