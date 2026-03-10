@@ -203,6 +203,9 @@ model Sale {
   userId      Int      
   user        User     @relation(fields: [userId], references: [id])
 
+  otherName   String?
+  otherPhone  String?
+
   items       SaleItem[]
 }
 
