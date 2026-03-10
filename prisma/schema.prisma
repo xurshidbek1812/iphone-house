@@ -242,10 +242,42 @@ model Contract {
   debtAmount     Decimal
   durationMonths Int      // 3, 6, 9, 12
   
-  status         String   @default("ACTIVE") // ACTIVE, CLOSED, OVERDUE
+  status         String   @default("ACTIVE") // ACTIVE, COMPLETED, OVERDUE
 
   items          ContractItem[]
   payments       Payment[]
+
+  // 🚨 YANGI QO'SHILGAN BOG'LANISHLAR:
+  schedules      ContractSchedule[]
+  comments       ContractComment[]
+}
+
+// ... qolgan modellar o'zgarishsiz qoladi ...
+
+// ==========================================
+// 🚨 YANGI: SHARTNOMA GRAFIKLARI VA IZOHLARI
+// ==========================================
+
+model ContractSchedule {
+  id          Int      @id @default(autoincrement())
+  contractId  Int
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  
+  monthNumber Int      // 1-oy, 2-oy...
+  date        DateTime // To'lov qilinishi kerak bo'lgan sana
+  monthlyPay  Decimal  // Oylik to'lanishi kerak bo'lgan summa
+  paid        Decimal  @default(0) // Shu oy uchun qancha to'landi
+  status      String   @default("KUTILYAPTI") // "KUTILYAPTI", "TOLANDI", "KECIKDI"
+}
+
+model ContractComment {
+  id          Int      @id @default(autoincrement())
+  contractId  Int
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  
+  authorName  String   // Izohni yozgan xodim (Masalan: Admin)
+  text        String   // Izoh matni
+  createdAt   DateTime @default(now())
 }
 
 model ContractItem {
