@@ -1064,17 +1064,17 @@ app.post('/api/products', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: "Narxlar faqat raqam bo'lishi shart!" });
     }
 
-    // 🚨 YANGI HIMOYA: Tovar nomi oldin qo'shilganligini tekshirish
-    const existingProduct = await prisma.product.findFirst({
-        where: {
-            name: {
-                equals: name.trim(), // bo'shliqlarni olib tashlab tekshiramiz
-                mode: 'insensitive'  // katta-kichik harflarni bir xil deb tushunadi (Masalan: "Iphone" = "iphone")
-            }
-        }
+    // 🚨 100% ISHONCHLI HIMOYA: Barcha tovarlar ro'yxatini olamiz va JS da tekshiramiz
+    const allProducts = await prisma.product.findMany({
+        select: { name: true }
     });
 
-    if (existingProduct) {
+    const incomingName = name.trim().toLowerCase();
+    
+    // Agar bazadagi biror tovar nomi frontenddan kelayotgan nom bilan bir xil bo'lsa (kichik harflarga o'girilganda)
+    const isDuplicate = allProducts.some(p => p.name.trim().toLowerCase() === incomingName);
+
+    if (isDuplicate) {
         return res.status(400).json({ error: "Bu nomdagi tovar bazada allaqachon mavjud!" });
     }
     
@@ -1084,7 +1084,7 @@ app.post('/api/products', authenticateToken, async (req, res) => {
         const newProd = await tx.product.create({
             data: {
                 customId: Number(customId),
-                name: name.trim(), // 🚨 Nomi doim toza bo'lib saqlanadi
+                name: name.trim(), // Asl ko'rinishida saqlaymiz (Masalan: iPhone 15 Pro)
                 category,
                 buyPrice: Number(buyPrice),
                 salePrice: Number(salePrice),
@@ -1115,6 +1115,7 @@ app.post('/api/products', authenticateToken, async (req, res) => {
     res.status(500).json({ error: "Tovar qo'shishda xatolik yuz berdi" });
   }
 });
+
 // --- TOVARNI TAHRIRLASH (Faqat narx, kategoriya, birlik va nomini o'zgartirish) ---
 app.put('/api/products/:id', authenticateToken, async (req, res) => {
     try {
@@ -1576,6 +1577,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
