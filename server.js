@@ -867,7 +867,6 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 // --- NAQD SAVDO (CASH SALES) API ---
 // ==========================================
 
-// 1. Barcha naqd savdolarni olish
 app.get('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
         const sales = await prisma.sale.findMany({
@@ -883,7 +882,8 @@ app.get('/api/cash-sales', authenticateToken, async (req, res) => {
 // 2. Yangi naqd savdo yaratish (FAQAT SAQLASH - JARAYONDA)
 app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
-        const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
+        // 🚨 QO'SHIMCHA PARAMETRLAR: discount va note qabul qilinadi
+        const { isAnonymous, customerId, otherName, otherPhone, totalAmount, discount, finalAmount, note, items } = req.body;
         
         if (!Array.isArray(items) || items.length === 0) {
             return res.status(400).json({ error: "Savat bo'sh! Savdoga tovar kiritilmadi." });
@@ -893,11 +893,14 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
             const newSale = await tx.sale.create({
                 data: {
                     totalAmount: Number(totalAmount),
+                    discount: Number(discount || 0),           // 🚨 BAZAGA YOZILADI
+                    finalAmount: Number(finalAmount || totalAmount), // 🚨 BAZAGA YOZILADI
+                    note: note || null,                        // 🚨 BAZAGA YOZILADI
                     customerId: isAnonymous ? null : Number(customerId),
                     userId: req.user.id,
                     otherName: isAnonymous ? otherName : null,
                     otherPhone: isAnonymous ? otherPhone : null,
-                    status: "JARAYONDA" // 🚨 Boshlang'ich holat - OMBORDAN AYIRILMAYDI
+                    status: "JARAYONDA" 
                 }
             });
 
@@ -933,50 +936,7 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     }
 });
 
-// 3. Savdoni tahrirlash (Agar hali tasdiqlanmagan bo'lsa)
-app.put('/api/cash-sales/:id', authenticateToken, async (req, res) => {
-    try {
-        const saleId = Number(req.params.id);
-        const { isAnonymous, customerId, otherName, otherPhone, totalAmount, items } = req.body;
-        
-        const existingSale = await prisma.sale.findUnique({ where: { id: saleId } });
-        if (!existingSale) return res.status(404).json({ error: "Savdo topilmadi!" });
-        if (existingSale.status === "TASDIQLANDI") return res.status(400).json({ error: "Tasdiqlangan savdoni tahrirlab bo'lmaydi!" });
-
-        await prisma.$transaction(async (tx) => {
-            // Asosiy ma'lumotlarni yangilash
-            await tx.sale.update({
-                where: { id: saleId },
-                data: {
-                    totalAmount: Number(totalAmount),
-                    customerId: isAnonymous ? null : Number(customerId),
-                    otherName: isAnonymous ? otherName : null,
-                    otherPhone: isAnonymous ? otherPhone : null
-                }
-            });
-
-            // Eski tovarlarni o'chirib, yangilarini yozamiz
-            await tx.saleItem.deleteMany({ where: { saleId } });
-
-            for (const item of items) {
-                await tx.saleItem.create({
-                    data: {
-                        saleId,
-                        productId: item.id,
-                        quantity: Number(item.qty),
-                        price: Number(item.salePrice)
-                    }
-                });
-            }
-        });
-
-        res.json({ success: true, message: "Savdo muvaffaqiyatli tahrirlandi" });
-    } catch (error) {
-        res.status(500).json({ error: "Tahrirlashda xatolik" });
-    }
-});
-
-// 4. Savdoni Tasdiqlash (PUL TUSHADI VA TOVAR OMBORDAN KETADI)
+// 3. Savdoni Tasdiqlash (PUL TUSHADI VA TOVAR OMBORDAN KETADI)
 app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => {
     try {
         const saleId = Number(req.params.id);
@@ -990,13 +950,11 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
         if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Bu savdo allaqachon tasdiqlangan!" });
 
         await prisma.$transaction(async (tx) => {
-            // 1. Statusni o'zgartiramiz
             await tx.sale.update({
                 where: { id: saleId },
                 data: { status: "TASDIQLANDI" }
             });
 
-            // 2. Ombordan tovarlarni ayiramiz
             for (const item of sale.items) {
                 const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
                 if (!currentProd || currentProd.quantity < item.quantity) {
@@ -1009,10 +967,10 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
                 });
             }
 
-            // 3. Kassaga pulni kirim qilamiz
+            // 🚨 DIQQAT: Kassaga "totalAmount" emas, "finalAmount" (Chegirmadan keyingi sof summa) tushadi!
             await tx.transaction.create({
                 data: {
-                    amount: sale.totalAmount,
+                    amount: sale.finalAmount, 
                     type: "INCOME",
                     category: "Naqd Savdo",
                     description: `Naqd savdo №${sale.id} bo'yicha to'lov`,
@@ -1028,7 +986,7 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
     }
 });
 
-// 5. Savdoni O'chirish (Agar Jarayonda bo'lsa)
+// 4. Savdoni O'chirish (Agar Jarayonda bo'lsa)
 app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
     try {
         const saleId = Number(req.params.id);
@@ -1045,6 +1003,7 @@ app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
         res.status(500).json({ error: "O'chirishda xatolik yuz berdi" });
     }
 });
+
 // --- CATEGORY ROUTES ---
 
 // 1. Get all categories
@@ -1659,6 +1618,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
