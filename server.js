@@ -749,8 +749,14 @@ app.get('/api/contracts', authenticateToken, async (req, res) => {
     try {
         const contracts = await prisma.contract.findMany({
             include: { 
-                customer: true, 
-                user: true 
+                customer: {
+                    include: { phones: true } // Mijozning telefon raqamlarini ham olamiz
+                }, 
+                user: true,
+                items: {
+                    include: { product: true } // Shartnoma ichidagi tovarlar va ularning nomlari
+                },
+                payments: true // Shu paytgacha qilingan barcha to'lovlar
             },
             orderBy: { id: 'desc' }
         });
@@ -1661,6 +1667,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
