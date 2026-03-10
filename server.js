@@ -1572,11 +1572,35 @@ app.get('/api/inventory/history', authenticateToken, async (req, res) => {
   }
 });
 
+// 🚨 VAQTINCHALIK API: Barcha eski tovarlarni avtomat normalizatsiya qilib chiqish uchun
+app.get('/api/fix-old-products', async (req, res) => {
+    try {
+        const products = await prisma.product.findMany();
+        let count = 0;
+        
+        for (const p of products) {
+            // Agar normalizedName hali yo'q bo'lsa
+            if (!p.normalizedName) {
+                const normName = normalizeProductName(p.name);
+                await prisma.product.update({
+                    where: { id: p.id },
+                    data: { normalizedName: normName }
+                });
+                count++;
+            }
+        }
+        res.send(`Ajoyib! ${count} ta eski tovar muvaffaqiyatli himoyaga olindi! 😎`);
+    } catch (error) {
+        res.send(`Xatolik: ${error.message}`);
+    }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
