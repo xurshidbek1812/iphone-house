@@ -936,6 +936,49 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     }
 });
 
+// 3. Savdoni tahrirlash (Agar hali tasdiqlanmagan bo'lsa)
+app.put('/api/cash-sales/:id', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        const { totalAmount, discount, finalAmount, note, items } = req.body;
+        
+        const existingSale = await prisma.sale.findUnique({ where: { id: saleId } });
+        if (!existingSale) return res.status(404).json({ error: "Savdo topilmadi!" });
+        if (existingSale.status === "TASDIQLANDI") return res.status(400).json({ error: "Tasdiqlangan savdoni tahrirlab bo'lmaydi!" });
+
+        await prisma.$transaction(async (tx) => {
+            // Asosiy ma'lumotlarni yangilash (Chegirma va izohni ham)
+            await tx.sale.update({
+                where: { id: saleId },
+                data: {
+                    totalAmount: Number(totalAmount),
+                    discount: Number(discount || 0),
+                    finalAmount: Number(finalAmount || totalAmount),
+                    note: note || null
+                }
+            });
+
+            // Eski tovarlarni o'chirib, yangilarini yozamiz
+            await tx.saleItem.deleteMany({ where: { saleId } });
+
+            for (const item of items) {
+                await tx.saleItem.create({
+                    data: {
+                        saleId,
+                        productId: item.id,
+                        quantity: Number(item.qty),
+                        price: Number(item.salePrice)
+                    }
+                });
+            }
+        });
+
+        res.json({ success: true, message: "Savdo muvaffaqiyatli tahrirlandi" });
+    } catch (error) {
+        res.status(500).json({ error: "Tahrirlashda xatolik" });
+    }
+});
+
 // 3. Savdoni Tasdiqlash (PUL TUSHADI VA TOVAR OMBORDAN KETADI)
 app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => {
     try {
@@ -1618,6 +1661,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
