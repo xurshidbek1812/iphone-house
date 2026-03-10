@@ -204,6 +204,9 @@ model Sale {
   user        User     @relation(fields: [userId], references: [id])
 
   status      String   @default("JARAYONDA")
+  discount    Decimal  @default(0)
+  finalAmount Decimal  @default(0)
+  note        String?
 
   otherName   String?
   otherPhone  String?
