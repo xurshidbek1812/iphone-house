@@ -115,73 +115,82 @@ app.get('/api/users', authenticateToken, async (req, res) => {
   } catch (error) { res.status(500).json({ message: "Xodimlarni yuklashda xato" }); }
 });
 
-// 2. Yangi xodim qo'shish
+// --- O'Z PROFILINI OLISH UCHUN ---
+app.get('/api/users/me', authenticateToken, async (req, res) => {
+    try {
+        const user = await prisma.user.findUnique({
+            where: { id: req.user.id },
+            select: { id: true, username: true, fullName: true, role: true, phone: true }
+        });
+        res.json(user);
+    } catch (e) {
+        res.status(500).json({ message: "Xato" });
+    }
+});
+
+// 2. Yangi xodim qo'shish (FAQAT DIREKTOR UCHUN + PAROL YASHIRILDI)
 app.post('/api/users', authenticateToken, async (req, res) => {
+  // HIMOYA: Faqat direktor yangi odam qo'sha oladi
+  if (req.user.role !== 'director') return res.status(403).json({ message: "Sizda yangi xodim qo'shish huquqi yo'q!" });
+
   try {
     const { username, password, fullName, phone, role } = req.body;
     
     const existingUser = await prisma.user.findUnique({ where: { username } });
-    if (existingUser) {
-        return res.status(400).json({ message: "Bu login allaqachon band! Boshqa login o'ylab toping." });
-    }
+    if (existingUser) return res.status(400).json({ message: "Bu login allaqachon band! Boshqa login o'ylab toping." });
 
-    // 🌟 PRO FIX: PAROLNI BAZAGA YUBORISHDAN OLDIN SHIFRLAYMIZ!
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const newUser = await prisma.user.create({
-      data: { username, password: hashedPassword, fullName, phone, role } // <--- shifrlangan parol ketdi
+      data: { username, password: hashedPassword, fullName, phone, role },
+      // HIMOYA: Javobda parolni yashiramiz!
+      select: { id: true, username: true, fullName: true, role: true, phone: true }
     });
     
     res.json(newUser);
   } catch (error) {
-    console.error("Xodim qo'shishda xato:", error);
     res.status(500).json({ message: "Serverda xatolik yuz berdi" });
   }
 });
 
-// 3. Xodimni tahrirlash (Yangilash)
+// 3. Xodimni tahrirlash (LOGIN BANDLIGINI TEKSHIRISH + PAROL YASHIRILDI)
 app.put('/api/users/:id', authenticateToken, async (req, res) => {
   try {
-    const { id } = req.params;
-    const targetUserId = Number(id);
+    const targetUserId = Number(req.params.id);
     const tokenUserId = req.user.id;
 
-    // 1. XAVFSIZLIK: Faqat direktor Yoki o'z profilini o'zgartirayotgan xodimga ruxsat
     if (req.user.role !== 'director' && tokenUserId !== targetUserId) {
         return res.status(403).json({ message: "Siz faqat o'zingizning profilingizni o'zgartira olasiz!" });
     }
 
     const { username, password, fullName, phone, role } = req.body;
     
-    // 2. Eski ma'lumotlarni topib olamiz (xato chiqmasligi uchun)
-    const existingUser = await prisma.user.findUnique({ where: { id: targetUserId } });
-    if (!existingUser) {
-        return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+    // HIMOYA: Agar usernameni o'zgartirayotgan bo'lsa, boshqasida yo'qligini tekshiramiz
+    if (username) {
+        const usernameTaken = await prisma.user.findFirst({ where: { username: username, NOT: { id: targetUserId } } });
+        if (usernameTaken) return res.status(400).json({ message: "Bu login boshqa xodim tomonidan band qilingan!" });
     }
 
-    // 3. Yangilanadigan ma'lumotlarni yig'amiz
+    const existingUser = await prisma.user.findUnique({ where: { id: targetUserId } });
+    if (!existingUser) return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+
     const updateData = { 
         username: username || existingUser.username, 
         fullName: fullName || existingUser.fullName, 
         phone: phone || existingUser.phone, 
-        // MUHIM: Rolni faqat direktor o'zgartira oladi, xodim o'ziga-o'zi direktorlikni bera olmaydi!
         role: req.user.role === 'director' ? (role || existingUser.role) : existingUser.role 
     };
     
-    // 4. Agar parol kiritilgan bo'lsa, uni shifrlaymiz
-    if (password) {
-        updateData.password = await bcrypt.hash(password, 10);
-    }
+    if (password) updateData.password = await bcrypt.hash(password, 10);
 
-    // 5. Bazaga saqlash
     const updatedUser = await prisma.user.update({
       where: { id: targetUserId },
-      data: updateData
+      data: updateData,
+      select: { id: true, username: true, fullName: true, role: true, phone: true } // PAROL YASHIRILDI
     });
     
     res.json(updatedUser);
   } catch (error) {
-    console.error("Xodimni yangilashda xato:", error);
     res.status(500).json({ message: "Yangilashda server xatosi yuz berdi" });
   }
 });
@@ -737,9 +746,15 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 
             // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
-                await tx.contractItem.create({
+                // HIMOYA: Tovar qoldig'ini tekshiramiz
+                const currentProd = await tx.product.findUnique({ where: { id: item.id } });
+                if (!currentProd || currentProd.quantity < item.qty) {
+                    throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
+                }
+
+                await tx.saleItem.create({ // contract bo'lsa contractItem.create bo'ladi
                     data: {
-                        contractId: newContract.id,
+                        saleId: newSale.id, // contract bo'lsa contractId: newContract.id
                         productId: item.id,
                         quantity: item.qty,
                         price: Number(item.salePrice)
@@ -821,9 +836,15 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
 
             // 2. Ichidagi tovarlarni yozamiz va OMBORDAN AYIRAMIZ
             for (const item of items) {
-                await tx.saleItem.create({
+                // HIMOYA: Tovar qoldig'ini tekshiramiz
+                const currentProd = await tx.product.findUnique({ where: { id: item.id } });
+                if (!currentProd || currentProd.quantity < item.qty) {
+                    throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
+                }
+
+                await tx.saleItem.create({ // contract bo'lsa contractItem.create bo'ladi
                     data: {
-                        saleId: newSale.id,
+                        saleId: newSale.id, // contract bo'lsa contractId: newContract.id
                         productId: item.id,
                         quantity: item.qty,
                         price: Number(item.salePrice)
@@ -1391,3 +1412,4 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
