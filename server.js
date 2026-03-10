@@ -752,9 +752,10 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
                     throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
                 }
 
-                await tx.saleItem.create({ // contract bo'lsa contractItem.create bo'ladi
+                // 🚨 TO'G'RILANGAN JOY: saleItem emas, contractItem bo'lishi kerak!
+                await tx.contractItem.create({ 
                     data: {
-                        saleId: newSale.id, // contract bo'lsa contractId: newContract.id
+                        contractId: newContract.id, // 🚨 newSale.id emas, newContract.id
                         productId: item.id,
                         quantity: item.qty,
                         price: Number(item.salePrice)
@@ -874,8 +875,13 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
 
         res.json({ success: true, sale });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Naqd savdo saqlashda xatolik" });
+        console.error("Naqd savdo xatosi:", error);
+        
+        if (error.message.includes("yetarli qoldiq yo'q")) {
+            return res.status(400).json({ error: error.message });
+        }
+
+        res.status(500).json({ error: "Naqd savdo saqlashda xatolik yuz berdi" });
     }
 });
 
@@ -1412,4 +1418,5 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
