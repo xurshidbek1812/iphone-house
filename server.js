@@ -107,13 +107,12 @@ app.get('/', (req, res) => {
 // 1. Barcha xodimlarni ko'rish
 app.get('/api/users', authenticateToken, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-        orderBy: { id: 'desc' }
+    const users = await prisma.user.findMany({ 
+        orderBy: { id: 'desc' },
+        select: { id: true, username: true, fullName: true, role: true, phone: true } 
     });
     res.json(users);
-  } catch (error) {
-    res.status(500).json({ message: "Xodimlarni yuklashda xato yuz berdi" });
-  }
+  } catch (error) { res.status(500).json({ message: "Xodimlarni yuklashda xato" }); }
 });
 
 // 2. Yangi xodim qo'shish
@@ -189,12 +188,13 @@ app.put('/api/users/:id', authenticateToken, async (req, res) => {
 
 // 4. Xodimni o'chirish
 app.delete('/api/users/:id', authenticateToken, async (req, res) => {
-  try {
-    const { id } = req.params;
-    await prisma.user.delete({ where: { id: Number(id) } });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ message: "O'chirishda xato yuz berdi" });
+  if (req.user.role !== 'director') return res.status(403).json({ message: "Sizda xodimlarni o'chirish huquqi yo'q!" });
+  
+  try { 
+      await prisma.user.delete({ where: { id: Number(req.params.id) } }); 
+      res.json({ success: true }); 
+  } catch (error) { 
+      res.status(500).json({ message: "Xato" }); 
   }
 });
 
@@ -1370,5 +1370,6 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
