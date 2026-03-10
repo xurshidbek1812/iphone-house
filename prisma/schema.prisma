@@ -156,7 +156,7 @@ model Product {
   createdAt      DateTime        @default(now())
   buyCurrency    String          @default("USD")
   saleCurrency   String          @default("UZS")
-  normalizedName String          @unique
+  normalizedName String?          @unique
   saleItems      SaleItem[]
   contractItems  ContractItem[]
   inventoryItems InventoryItem[] 
