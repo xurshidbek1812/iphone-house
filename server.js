@@ -45,6 +45,11 @@ export const authenticateToken = (req, res, next) => {
     });
 };
 
+const normalizeProductName = (value) => {
+    if (!value) return "";
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+};
+
 // ==========================================
 // --- 2. LOGIN API (HAQIQIY BAZA ORQALI) ---
 // ==========================================
@@ -1600,6 +1605,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
