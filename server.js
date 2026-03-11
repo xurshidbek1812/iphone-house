@@ -1728,11 +1728,27 @@ app.get('/api/inventory/history', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// --- TRANZAKSIYALAR (MOLIYA) API ---
+// ==========================================
+app.get('/api/transactions', authenticateToken, async (req, res) => {
+    try {
+        const transactions = await prisma.transaction.findMany({
+            include: { user: true, cashbox: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        res.json(transactions);
+    } catch (error) {
+        res.status(500).json({ error: "Tranzaksiyalarni yuklashda xatolik" });
+    }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
