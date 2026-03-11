@@ -1064,7 +1064,6 @@ app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
         const sale = await prisma.sale.findUnique({ where: { id: saleId } });
         
         if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
-        if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Tasdiqlangan savdoni o'chirib bo'lmaydi!" });
 
         await prisma.saleItem.deleteMany({ where: { saleId } });
         await prisma.sale.delete({ where: { id: saleId } });
@@ -1689,6 +1688,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
