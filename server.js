@@ -1057,19 +1057,64 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
     }
 });
 
-// 4. Savdoni O'chirish (Agar Jarayonda bo'lsa)
+// 4. Savdoni O'chirish va Tovarlarni Omborga Qaytarish
 app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
     try {
         const saleId = Number(req.params.id);
-        const sale = await prisma.sale.findUnique({ where: { id: saleId } });
+        
+        // 1. Savdoni va unga tegishli barcha tovarlarni (items) topib olamiz
+        const sale = await prisma.sale.findUnique({ 
+            where: { id: saleId },
+            include: { items: true } // <--- BU MUHIM: Nimalar sotilganini bilishimiz kerak
+        });
         
         if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
 
-        await prisma.saleItem.deleteMany({ where: { saleId } });
-        await prisma.sale.delete({ where: { id: saleId } });
+        // 2. Prisma Transaction (Agar bitta joyda xato ketsa, butun jarayon bekor qilinadi)
+        await prisma.$transaction(async (tx) => {
+            
+            // 3. Har bir sotilgan tovarni aylanib chiqib, omborga sonini qaytaramiz
+            for (const item of sale.items) {
+                // Eslatma: Prisma schema'da tovar soni 'quantity' yoki 'qty' deb atalgan bo'lishi mumkin. 
+                // O'zingizning schema'ga qarab moslang (quyida item.quantity deb oldim)
+                const returnedQty = item.quantity || item.qty;
 
-        res.json({ success: true, message: "Savdo o'chirildi" });
+                // A) Asosiy Product qoldig'ini tiklaymiz
+                if (item.productId) {
+                    await tx.product.update({
+                        where: { id: item.productId },
+                        data: { quantity: { increment: returnedQty } }
+                    });
+                }
+                
+                // B) Agar tovar aniq bir partiyadan (Batch) yechilgan bo'lsa, uni ham tiklaymiz
+                // Schema'da "batchId" yoki "productBatchId" bo'lsa ishlatiladi
+                if (item.batchId) {
+                    // Agar modelingiz nomi Batch bo'lsa `tx.batch`, ProductBatch bo'lsa `tx.productBatch` bo'ladi
+                    await tx.batch.update({
+                        where: { id: item.batchId },
+                        data: { quantity: { increment: returnedQty } }
+                    });
+                }
+            }
+
+            // 4. Agar shu savdoga to'lov qilingan bo'lsa (Kutilmoqda/Yakunlangan), to'lovlarni ham o'chiramiz
+            // (Agar sizda Payment degan jadval bo'lsa, qulab tushmasligi uchun avval uni o'chirish kerak)
+            const paymentsExist = await tx.payment.count({ where: { saleId } });
+            if (paymentsExist > 0) {
+                await tx.payment.deleteMany({ where: { saleId } });
+            }
+
+            // 5. Savdo ichidagi tovarlar ro'yxatini (SaleItem) o'chiramiz
+            await tx.saleItem.deleteMany({ where: { saleId } });
+            
+            // 6. Oxirida savdoning o'zini o'chiramiz
+            await tx.sale.delete({ where: { id: saleId } });
+        });
+
+        res.json({ success: true, message: "Savdo o'chirildi va tovarlar omborga qaytarildi!" });
     } catch (error) {
+        console.error("Delete Sale Error:", error);
         res.status(500).json({ error: "O'chirishda xatolik yuz berdi" });
     }
 });
@@ -1688,6 +1733,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
