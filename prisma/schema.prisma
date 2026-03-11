@@ -1,5 +1,3 @@
-// This is your Database Schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,18 +9,18 @@ datasource db {
 
 // --- 1. STAFF (ADMINS) ---
 model User {
-  id           Int      @id @default(autoincrement())
+  id           Int           @id @default(autoincrement())
   fullName     String
-  username     String   @unique
+  username     String        @unique
   password     String
-  phone        String?  // <--- MANA SHU YAZUVNI QO'SHING
-  role         String   @default("ADMIN")
-  createdAt    DateTime @default(now())
-  
+  phone        String? 
+  role         String        @default("ADMIN")
+  createdAt    DateTime      @default(now())
+
   // Relations
   sales        Sale[]
   contracts    Contract[]
-  transactions Transaction[]
+  transactions Transaction[] // (Ikkita edi, bittasi olib tashlandi)
 }
 
 // --- 2. MIJOZLAR (CUSTOMERS - TO'LIQ) ---
@@ -79,54 +77,54 @@ model BlacklistRequest {
 }
 
 model CustomerDocument {
-  id           Int      @id @default(autoincrement())
-  customerId   Int      @unique
-  customer     Customer @relation(fields: [customerId], references: [id])
+  id         Int      @id @default(autoincrement())
+  customerId Int      @unique
+  customer   Customer @relation(fields: [customerId], references: [id])
   
-  type         String   // "Passport", "ID Card", "Guvohnoma"
-  series       String   // "AA"
-  number       String   // "1234567"
-  givenDate    DateTime // Berilgan sana
-  expiryDate   DateTime // Amal qilish muddati
-  givenBy      String   // Kim tomonidan berilgan
+  type       String   // "Passport", "ID Card", "Guvohnoma"
+  series     String   // "AA"
+  number     String   // "1234567"
+  givenDate  DateTime // Berilgan sana
+  expiryDate DateTime // Amal qilish muddati
+  givenBy    String   // Kim tomonidan berilgan
 }
 
 model CustomerAddress {
-  id           Int      @id @default(autoincrement())
-  customerId   Int      @unique
-  customer     Customer @relation(fields: [customerId], references: [id])
+  id         Int      @id @default(autoincrement())
+  customerId Int      @unique
+  customer   Customer @relation(fields: [customerId], references: [id])
 
-  regionId     Int      // Viloyat (ID bo'yicha qoladi)
-  districtId   Int      // Tuman (ID bo'yicha qoladi)
+  regionId   Int      // Viloyat (ID bo'yicha qoladi)
+  districtId Int      // Tuman (ID bo'yicha qoladi)
   
-  mfy          String?  // Endi bu shunchaki matn (Text)
+  mfy        String?  // Endi bu shunchaki matn (Text)
   
-  street       String?
-  landmark     String?
+  street     String?
+  landmark   String?
 }
 
 model CustomerPhone {
-  id           Int      @id @default(autoincrement())
-  customerId   Int
-  customer     Customer @relation(fields: [customerId], references: [id])
+  id         Int      @id @default(autoincrement())
+  customerId Int
+  customer   Customer @relation(fields: [customerId], references: [id])
   
-  name         String   // "Shaxsiy raqam", "Dadasini raqami"
-  phone        String   // "+998901234567"
-  isMain       Boolean  @default(false) // Asosiy raqammi?
+  name       String   // "Shaxsiy raqam", "Dadasini raqami"
+  phone      String   // "+998901234567"
+  isMain     Boolean  @default(false) // Asosiy raqammi?
 }
 
 model CustomerJob {
-  id           Int      @id @default(autoincrement())
-  customerId   Int      @unique
-  customer     Customer @relation(fields: [customerId], references: [id])
+  id          Int      @id @default(autoincrement())
+  customerId  Int      @unique
+  customer    Customer @relation(fields: [customerId], references: [id])
 
-  type         String   // "ISHCHI", "NAFAQA", "ISHSIZ"
+  type        String   // "ISHCHI", "NAFAQA", "ISHSIZ"
   
   // Agar "ISHCHI" bo'lsa:
-  companyName  String?  // Ish joyi nomi
-  position     String?  // Lavozimi
+  companyName String?  // Ish joyi nomi
+  position    String?  // Lavozimi
 
-  source       String?  // Mijoz oqimi manbasi
+  source      String?  // Mijoz oqimi manbasi
 }
 
 // --- 3. HUDUDLAR (Tuman va Viloyatlar) ---
@@ -137,10 +135,10 @@ model Region {
 }
 
 model District {
-  id        Int      @id @default(autoincrement())
-  name      String
-  regionId  Int
-  region    Region   @relation(fields: [regionId], references: [id])
+  id       Int    @id @default(autoincrement())
+  name     String
+  regionId Int
+  region   Region @relation(fields: [regionId], references: [id])
 }
 
 // --- 4. TOVARLAR VA PARTIYALAR ---
@@ -156,7 +154,7 @@ model Product {
   createdAt      DateTime        @default(now())
   buyCurrency    String          @default("USD")
   saleCurrency   String          @default("UZS")
-  normalizedName String?          @unique
+  normalizedName String?         @unique
   saleItems      SaleItem[]
   contractItems  ContractItem[]
   inventoryItems InventoryItem[] 
@@ -176,8 +174,8 @@ model ProductBatch {
   salePrice     Float?
   buyCurrency   String   @default("USD")
   createdAt     DateTime @default(now())
-  supplierName   String?
-  invoiceNumber  String? 
+  supplierName  String?
+  invoiceNumber String? 
 
   // Tovar bilan bog'lanish
   productId     Int
@@ -247,15 +245,12 @@ model Contract {
   items          ContractItem[]
   payments       Payment[]
 
-  // 🚨 YANGI QO'SHILGAN BOG'LANISHLAR:
   schedules      ContractSchedule[]
   comments       ContractComment[]
 }
 
-// ... qolgan modellar o'zgarishsiz qoladi ...
-
 // ==========================================
-// 🚨 YANGI: SHARTNOMA GRAFIKLARI VA IZOHLARI
+// SHARTNOMA GRAFIKLARI VA IZOHLARI
 // ==========================================
 
 model ContractSchedule {
@@ -290,18 +285,40 @@ model ContractItem {
   price      Decimal
 }
 
-// --- 7. FINANCE (KASSA) ---
+// --- 7. FINANCE (KASSA VA TRANZAKSIYALAR) ---
+
+model Cashbox {
+  id           Int           @id @default(autoincrement())
+  name         String        @unique // "Asosiy Kassa", "Karta Kassa"
+  balance      Decimal       @default(0)
+  currency     String        @default("UZS")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  transactions Transaction[]
+}
+
 model Transaction {
-  id          Int      @id @default(autoincrement())
-  createdAt   DateTime @default(now())
-  amount      Decimal
-  currency    String   @default("UZS") 
-  type        String   // INCOME, EXPENSE
-  category    String   
-  description String?
+  id            Int      @id @default(autoincrement())
+  type          String   // "KIRIM" (INCOME) yoki "CHIQIM" (EXPENSE)
+  amount        Decimal  
+  currency      String   @default("UZS") 
   
-  userId      Int      
-  user        User     @relation(fields: [userId], references: [id])
+  paymentMethod String   @default("NAQD") // "NAQD", "KARTA", "BANK"
+  category      String?  // Eski mantiq uchun: INCOME/EXPENSE turlari
+  reason        String?  // Yangi mantiq: "Naqd savdo", "Arenda"
+  description   String?  // Eski note maydoni
+  
+  referenceId   Int?     // Qaysi savdo (Sale) yoki shartnoma (Contract) ga tegishli
+  createdAt     DateTime @default(now())
+  
+  // Tranzaksiya qaysi kassada bo'ldi?
+  cashboxId     Int?
+  cashbox       Cashbox? @relation(fields: [cashboxId], references: [id])
+
+  // Xodim bilan bog'lanish
+  userId        Int      
+  user          User     @relation(fields: [userId], references: [id])
 }
 
 model Payment {
@@ -325,11 +342,11 @@ model Supplier {
 
 // --- SANOQ TARIXI (INVENTORY HISTORY) ---
 model InventoryAct {
-  id        Int      @id @default(autoincrement())
-  date      DateTime @default(now())
-  totalDiff Float    @default(0) // Umumiy farq (Masalan: -5 ta yoki +2 ta)
-  isStockUpdated Boolean         @default(false)
-  items     InventoryItem[]
+  id             Int      @id @default(autoincrement())
+  date           DateTime @default(now())
+  totalDiff      Float    @default(0) 
+  isStockUpdated Boolean  @default(false)
+  items          InventoryItem[]
 }
 
 model InventoryItem {
@@ -340,9 +357,9 @@ model InventoryItem {
   productId      Int
   product        Product      @relation(fields: [productId], references: [id])
   
-  systemQty      Float        // Kompyuterdagi eski son
-  countedQty     Float        // Sanalgan haqiqiy son
-  diff           Float        // Farq
+  systemQty      Float        
+  countedQty     Float        
+  diff           Float        
 }
 
 // --- 8. TA'MINOTCHI FAKTURALARI (KIRIM/CHIQIM TARIXI UCHUN) ---
@@ -353,8 +370,8 @@ model SupplierInvoice {
   supplierName  String
   totalSum      Decimal               @default(0)
   exchangeRate  Decimal               @default(12500)
-  status        String                @default("Jarayonda") // "Jarayonda", "Yuborildi", "Tasdiqlandi"
-  userName      String                // Fakturani kim kiritgani
+  status        String                @default("Jarayonda") 
+  userName      String                
   
   items         SupplierInvoiceItem[]
   createdAt     DateTime              @default(now())
@@ -369,9 +386,9 @@ model SupplierInvoiceItem {
   customId          Int
   name              String
   count             Float
-  price             Decimal         // Kirim narxi
-  salePrice         Decimal         // Sotuv narxi
+  price             Decimal         
+  salePrice         Decimal         
   currency          String          @default("UZS")
-  markup            Float?          // Ustama foizi
-  total             Decimal         // Jami summa
+  markup            Float?          
+  total             Decimal         
 }
