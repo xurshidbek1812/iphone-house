@@ -1458,7 +1458,7 @@ app.post('/api/products', authenticateToken, async (req, res) => {
   }
 });
 
-// --- TOVARNI TAHRIRLASH (PUT) ---
+// --- 1. ASOSIY TOVARNI TAHRIRLASH (Va uning partiyalarini ham yangilash) ---
 app.put('/api/products/:id', authenticateToken, async (req, res) => {
     try {
         const productId = Number(req.params.id);
@@ -1466,19 +1466,37 @@ app.put('/api/products/:id', authenticateToken, async (req, res) => {
         
         if (!name) return res.status(400).json({ error: "Tovar nomi bo'sh bo'lishi mumkin emas!" });
 
-        // Nomi normalizatsiya qilinadi
         const normalizedName = normalizeProductName(name);
+        const newSalePrice = Number(salePrice);
         
-        const updatedProduct = await prisma.product.update({
-            where: { id: productId },
-            data: {
-                name: name.trim(),
-                normalizedName: normalizedName, // 🚨 TAHRIRLASHDAGI HIMOYA
-                category: category,
-                unit: unit,
-                buyPrice: Number(buyPrice),
-                salePrice: Number(salePrice)
-            }
+        // 🚨 TRANSACTION orqali ham asosiy tovarni, ham uning partiyalarini yangilaymiz
+        const updatedProduct = await prisma.$transaction(async (tx) => {
+            // A) Asosiy tovarni yangilash
+            const prod = await tx.product.update({
+                where: { id: productId },
+                data: {
+                    name: name.trim(),
+                    normalizedName: normalizedName,
+                    category: category,
+                    unit: unit,
+                    buyPrice: Number(buyPrice),
+                    salePrice: newSalePrice
+                }
+            });
+
+            // B) Barcha 'tirik' partiyalarining ham sotuv narxini avtomat yangilash
+            await tx.productBatch.updateMany({
+                where: { 
+                    productId: productId,
+                    isArchived: false,
+                    quantity: { gt: 0 } // Faqat qoldig'i borlarning narxini o'zgartiramiz
+                },
+                data: {
+                    salePrice: newSalePrice
+                }
+            });
+
+            return prod;
         });
         
         res.json({ success: true, product: updatedProduct });
@@ -1491,6 +1509,26 @@ app.put('/api/products/:id', authenticateToken, async (req, res) => {
     }
 });
 
+// --- 2. YANGI: FAQAT BITTA PARTIYA (BATCH) SOTUV NARXINI TAHRIRLASH ---
+app.patch('/api/products/batches/:id/price', authenticateToken, async (req, res) => {
+    try {
+        const batchId = Number(req.params.id);
+        const { salePrice } = req.body;
+
+        if (isNaN(salePrice) || salePrice < 0) {
+            return res.status(400).json({ error: "Sotuv narxi noto'g'ri kiritildi!" });
+        }
+
+        const updatedBatch = await prisma.productBatch.update({
+            where: { id: batchId },
+            data: { salePrice: Number(salePrice) }
+        });
+
+        res.json({ success: true, batch: updatedBatch });
+    } catch (error) {
+        res.status(500).json({ error: "Narxni o'zgartirishda xatolik yuz berdi" });
+    }
+});
 // --- 2. TA'MINOTCHIDAN TOVAR QABUL QILISH (KIRIM) ---
 app.post('/api/products/:id/receive', authenticateToken, async (req, res) => {
     const productId = parseInt(req.params.id);
@@ -1942,6 +1980,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
