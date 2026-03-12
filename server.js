@@ -790,6 +790,7 @@ app.post('/api/contracts/:id/comments', authenticateToken, async (req, res) => {
         res.status(500).json({ error: "Izoh qo'shishda xatolik yuz berdi" });
     }
 });
+
 // 2. Yangi shartnoma yaratish (Sotuv)
 app.post('/api/contracts', authenticateToken, async (req, res) => {
     try {
@@ -855,8 +856,26 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
                 });
             }
 
-            // 3. Agar oldindan to'lov (Prepayment) bo'lsa, uni Kassaga (Transaction) yozamiz
+            // 3. Agar oldindan to'lov (Prepayment) bo'lsa, uni Kassaga va Moliya (Transaction) ga yozamiz
             if (Number(prepayment) > 0) {
+                
+                // 🚨 A) ASOSIY UZS KASSANI TOPAMIZ
+                const mainCashbox = await tx.cashbox.findFirst({
+                    where: { currency: 'UZS' },
+                    orderBy: { id: 'asc' }
+                });
+
+                if (!mainCashbox) {
+                    throw new Error("Xato: Tizimda pul tushadigan UZS kassa topilmadi! (Kassa yarating)");
+                }
+
+                // 🚨 B) KASSA QOLDIG'INI OSHIRAMIZ
+                await tx.cashbox.update({
+                    where: { id: mainCashbox.id },
+                    data: { balance: { increment: Number(prepayment) } }
+                });
+
+                // C) Shartnoma to'lovini (Payment) yaratamiz
                 await tx.payment.create({
                     data: {
                         contractId: newContract.id,
@@ -865,12 +884,16 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
                     }
                 });
                 
+                // 🚨 D) MOLIYA (TRANSACTION) TARIXIGA KASSA BILAN ULAB YOZAMIZ
                 await tx.transaction.create({
                     data: {
                         amount: Number(prepayment),
                         type: "INCOME",
-                        category: "Shartnoma to'lovi",
+                        paymentMethod: "NAQD",              // Yangi qoidaga ko'ra
+                        reason: "Shartnoma to'lovi",        // Yangi qoidaga ko'ra
                         description: `Shartnoma ${newContract.contractNumber} bo'yicha boshlang'ich to'lov`,
+                        referenceId: newContract.id,        // Qaysi shartnomadan kelgani
+                        cashboxId: mainCashbox.id,          // Kassaga bog'lash
                         userId: req.user.id
                     }
                 });
@@ -883,7 +906,7 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error("Shartnoma xatosi:", error);
         
-        // 5-HIMOYA: Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni mijozga ko'rsatamiz
+        // 5-HIMOYA: Agar xato o'zimiz yozgan "Xato:" so'zi bilan boshlansa, uni frontendga qaytaramiz
         if (error.message.startsWith("Xato:")) {
             return res.status(400).json({ error: error.message });
         }
@@ -1142,14 +1165,20 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
         });
 
         if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
-        if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Bu savdo allaqachon tasdiqlangan!" });
+        
+        // Eslatma: Eski statuslar (Tasdiqlandi yoki Yakunlangan)
+        if (sale.status === "TASDIQLANDI" || sale.status === "YAKUNLANGAN") {
+            return res.status(400).json({ error: "Bu savdo allaqachon tasdiqlangan!" });
+        }
 
         await prisma.$transaction(async (tx) => {
+            // 1. Savdo statusini yangilash
             await tx.sale.update({
                 where: { id: saleId },
-                data: { status: "TASDIQLANDI" }
+                data: { status: "TASDIQLANDI" } // Yoki "YAKUNLANGAN" qilsangiz ham bo'ladi
             });
 
+            // 2. Tovarlarni ombordan yechish
             for (const item of sale.items) {
                 const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
                 if (!currentProd || currentProd.quantity < item.quantity) {
@@ -1162,21 +1191,40 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
                 });
             }
 
-            // 🚨 DIQQAT: Kassaga "totalAmount" emas, "finalAmount" (Chegirmadan keyingi sof summa) tushadi!
+            // 🚨 3. ASOSIY KASSANI TOPIB, QOLDIQNI OSHIRISH (YANGI LOGIKA)
+            const mainCashbox = await tx.cashbox.findFirst({
+                where: { currency: 'UZS' }, // UZS kassani topamiz
+                orderBy: { id: 'asc' }
+            });
+
+            if (!mainCashbox) {
+                throw new Error("Xato: Tizimda pul tushadigan UZS kassa topilmadi! (Avval kassa yarating)");
+            }
+
+            // Kassadagi pulni (balance) ko'paytiramiz
+            await tx.cashbox.update({
+                where: { id: mainCashbox.id },
+                data: { balance: { increment: sale.finalAmount } }
+            });
+
+            // 🚨 4. MOLIYA (TRANZAKSIYA) YARATISH (KASSAGA ULAB)
             await tx.transaction.create({
                 data: {
                     amount: sale.finalAmount, 
                     type: "INCOME",
-                    category: "Naqd Savdo",
+                    paymentMethod: "NAQD",              // Yangi qoidaga ko'ra
+                    reason: "Naqd Savdo",               // Yangi qoidaga ko'ra
                     description: `Naqd savdo №${sale.id} bo'yicha to'lov`,
+                    referenceId: sale.id,               // Savdo ID siga ulaymiz
+                    cashboxId: mainCashbox.id,          // 🚨 KASSAGA ULASH (Eng muhimi!)
                     userId: req.user.id
                 }
             });
         });
 
-        res.json({ success: true, message: "Savdo tasdiqlandi, tovarlar ombordan yechildi va kassaga pul tushdi!" });
+        res.json({ success: true, message: "Savdo tasdiqlandi, tovarlar ombordan yechildi va KASSAGA pul tushdi!" });
     } catch (error) {
-        if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
+        if (error.message && error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
         res.status(500).json({ error: "Tasdiqlashda xatolik yuz berdi" });
     }
 });
@@ -1872,6 +1920,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
