@@ -567,31 +567,32 @@ app.delete('/api/blacklist-requests/:id', authenticateToken, async (req, res) =>
 // ==========================================
 app.get('/api/dashboard', authenticateToken, async (req, res) => {
   try {
-    // 1. Calculate Total Inventory Value (Ombor)
+    // 1. Ombor qiymati
     const products = await prisma.product.findMany();
     const inventoryValue = products.reduce((sum, item) => {
       return sum + ((item.quantity || 0) * Number(item.buyPrice || 0));
     }, 0);
 
-    // 2. Calculate Total Income (Kassa)
-    const income = await prisma.transaction.aggregate({
-      where: { type: 'INCOME' },
-      _sum: { amount: true }
+    // 🚨 2. KASSA QOLDIG'I (YANGI MANTIQ)
+    // Faqat UZS (So'm) kassalarining jami qoldig'ini hisoblaymiz
+    const cashboxes = await prisma.cashbox.findMany({
+        where: { currency: 'UZS' } 
     });
+    const totalCashBalance = cashboxes.reduce((sum, box) => sum + Number(box.balance), 0);
 
-    // 3. Calculate Total Debt (Undiruv)
+    // 3. Undiruv (Qarzlar)
     const debt = await prisma.contract.aggregate({
       _sum: { debtAmount: true }
     });
 
     const stats = {
       inventoryValue: inventoryValue || 0,
-      totalIncome: income._sum.amount || 0,
+      totalIncome: totalCashBalance || 0, // 🚨 KASSADAGI HAQIQIY PUL KO'RINADI
       totalDebt: debt._sum.debtAmount || 0,
       productCount: products.length
     };
 
-    // 4. HAQIQIY BILDIRISHNOMALAR (So'nggi savdolar / harakatlar)
+    // 4. Bildirishnomalar (So'nggi savdolar)
     const recentSales = await prisma.sale.findMany({
         take: 10,
         orderBy: { id: 'desc' },
@@ -603,19 +604,19 @@ app.get('/api/dashboard', authenticateToken, async (req, res) => {
         type: 'Naqd Savdo',
         supplier: sale.customer ? `${sale.customer.lastName} ${sale.customer.firstName}` : (sale.otherName || 'Anonim mijoz'),
         sender: sale.user?.fullName || 'Xodim',
-        totalSum: sale.totalAmount,
+        totalSum: sale.finalAmount || sale.totalAmount,
         date: sale.date.toLocaleString('uz-UZ'),
-        status: 'Yuborildi',
+        status: sale.status,
         isRead: false
     }));
 
-    // Ham statlarni, ham xabarlarni bitta json qilib jo'natamiz
     res.json({ stats, notifications });
   } catch (error) {
     console.error("Dashboard xatosi:", error);
     res.status(500).json({ error: "Stats error" });
   }
 });
+
 // ==========================================
 // --- FAKTURALAR (INVOICES) API ---
 // ==========================================
@@ -1871,6 +1872,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
