@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import ordersRoutes from './routes/orders.routes.js';
 
 dotenv.config();
 
@@ -22,7 +23,8 @@ if (!JWT_SECRET) {
 app.use(cors({
   origin: [ 'https://iphone-house-frontend.vercel.app',
             'https://iphone-house.store',
-            'https://www.iphone-house.store'],
+            'https://www.iphone-house.store',
+            'http://localhost:5173'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -48,6 +50,95 @@ export const authenticateToken = (req, res, next) => {
 const normalizeProductName = (value) => {
     if (!value) return "";
     return value.trim().toLowerCase().replace(/\s+/g, ' ');
+};
+
+const generateOrderNumber = () => {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mi = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  return `ORD-${yyyy}${mm}${dd}-${hh}${mi}${ss}`;
+};
+
+const getMainCashbox = async (tx, cashboxId) => {
+  if (cashboxId) {
+    const cashbox = await tx.cashbox.findUnique({
+      where: { id: Number(cashboxId) }
+    });
+    if (!cashbox) {
+      throw new Error("Xato: Tanlangan kassa topilmadi!");
+    }
+    return cashbox;
+  }
+
+  const mainCashbox = await tx.cashbox.findFirst({
+    orderBy: { id: 'asc' }
+  });
+
+  if (!mainCashbox) {
+    throw new Error("Xato: Tizimda kassa topilmadi! Avval kassa yarating.");
+  }
+
+  return mainCashbox;
+};
+
+const allocateStockFIFO = async (tx, productId, requestedQty) => {
+  const qty = Number(requestedQty);
+
+  if (isNaN(qty) || qty <= 0) {
+    throw new Error("Xato: So'ralgan miqdor noto'g'ri!");
+  }
+
+  const product = await tx.product.findUnique({
+    where: { id: Number(productId) }
+  });
+
+  if (!product) {
+    throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
+  }
+
+  if (Number(product.quantity) < qty) {
+    throw new Error(`Xato: ${product.name} tovaridan omborda yetarli qoldiq yo'q!`);
+  }
+
+  const batches = await tx.productBatch.findMany({
+    where: {
+      productId: Number(productId),
+      isArchived: false,
+      quantity: { gt: 0 }
+    },
+    orderBy: { createdAt: 'asc' }
+  });
+
+  let remaining = qty;
+  const allocations = [];
+
+  for (const batch of batches) {
+    if (remaining <= 0) break;
+
+    const available = Number(batch.quantity);
+    if (available <= 0) continue;
+
+    const taken = Math.min(available, remaining);
+
+    allocations.push({
+      batchId: batch.id,
+      quantity: taken,
+      unitCost: Number(batch.buyPrice || 0),
+      unitPrice: Number(batch.salePrice || product.salePrice || 0)
+    });
+
+    remaining -= taken;
+  }
+
+  if (remaining > 0) {
+    throw new Error(`Xato: ${product.name} uchun batchlar bo'yicha yetarli qoldiq topilmadi!`);
+  }
+
+  return { product, allocations };
 };
 
 // ==========================================
@@ -103,6 +194,8 @@ app.post('/api/login', async (req, res) => {
 app.get('/', (req, res) => {
   res.send('Iphone House API is Running! 🚀');
 });
+
+app.use('/api/orders', ordersRoutes);
 
 // 2. Users Route
 // ==========================================
@@ -891,6 +984,241 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
     }
 });
 
+app.get('/api/orders', authenticateToken, async (req, res) => {
+  try {
+    const orders = await prisma.order.findMany({
+      include: {
+        customer: true,
+        partner: true,
+        user: true,
+        items: {
+          include: {
+            product: true,
+            allocations: {
+              include: {
+                batch: true
+              }
+            }
+          }
+        },
+        payments: true
+      },
+      orderBy: { id: 'desc' }
+    });
+
+    res.json(orders);
+  } catch (error) {
+    console.error("Orderlarni olishda xatolik:", error);
+    res.status(500).json({ error: "Orderlarni olishda xatolik yuz berdi" });
+  }
+});
+
+app.post('/api/orders/direct', authenticateToken, async (req, res) => {
+  try {
+    const {
+      customerId,
+      cashboxId,
+      paymentMethod,
+      note,
+      discountAmount,
+      items
+    } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
+    }
+
+    const order = await prisma.$transaction(async (tx) => {
+      const mainCashbox = await getMainCashbox(tx, cashboxId);
+
+      let subtotal = 0;
+      const preparedItems = [];
+
+      for (const item of items) {
+        const productId = Number(item.productId || item.id);
+        const quantity = Number(item.quantity || item.qty);
+        const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
+
+        if (isNaN(productId) || productId <= 0) {
+          throw new Error("Xato: Tovar ID noto'g'ri!");
+        }
+
+        if (isNaN(quantity) || quantity <= 0) {
+          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
+        }
+
+        if (isNaN(unitPrice) || unitPrice < 0) {
+          throw new Error("Xato: Tovar narxi noto'g'ri!");
+        }
+
+        const { product, allocations } = await allocateStockFIFO(tx, productId, quantity);
+
+        const lineDiscount = Number(item.discountAmount || 0);
+        const lineTotal = (quantity * unitPrice) - lineDiscount;
+
+        subtotal += lineTotal;
+
+        preparedItems.push({
+          product,
+          productId,
+          quantity,
+          unitPrice,
+          discountAmount: lineDiscount,
+          totalAmount: lineTotal,
+          allocations
+        });
+      }
+
+      const totalDiscount = Number(discountAmount || 0);
+      const totalAmount = subtotal - totalDiscount;
+
+      if (totalAmount < 0) {
+        throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
+      }
+
+      const createdOrder = await tx.order.create({
+        data: {
+          orderNumber: generateOrderNumber(),
+          orderType: "DIRECT",
+          status: "COMPLETED",
+          customerId: customerId ? Number(customerId) : null,
+          userId: req.user.id,
+          subtotal: subtotal,
+          discountAmount: totalDiscount,
+          totalAmount: totalAmount,
+          paidAmount: totalAmount,
+          dueAmount: 0,
+          note: note || null
+        }
+      });
+
+      for (const preparedItem of preparedItems) {
+        const createdItem = await tx.orderItem.create({
+          data: {
+            orderId: createdOrder.id,
+            productId: preparedItem.productId,
+            quantity: preparedItem.quantity,
+            unitPrice: preparedItem.unitPrice,
+            discountAmount: preparedItem.discountAmount,
+            totalAmount: preparedItem.totalAmount
+          }
+        });
+
+        for (const allocation of preparedItem.allocations) {
+          await tx.orderItemBatchAllocation.create({
+            data: {
+              orderItemId: createdItem.id,
+              batchId: allocation.batchId,
+              quantity: allocation.quantity,
+              unitCost: allocation.unitCost,
+              unitPrice: preparedItem.unitPrice
+            }
+          });
+
+          await tx.productBatch.update({
+            where: { id: allocation.batchId },
+            data: {
+              quantity: { decrement: allocation.quantity }
+            }
+          });
+
+          await tx.stockMovement.create({
+            data: {
+              productId: preparedItem.productId,
+              batchId: allocation.batchId,
+              type: "OUT",
+              quantity: allocation.quantity,
+              unitCost: allocation.unitCost,
+              unitPrice: preparedItem.unitPrice,
+              sourceType: "ORDER",
+              sourceId: createdOrder.id,
+              note: `Direct order ${createdOrder.orderNumber}`,
+              userId: req.user.id
+            }
+          });
+        }
+
+        await tx.product.update({
+          where: { id: preparedItem.productId },
+          data: {
+            quantity: { decrement: preparedItem.quantity }
+          }
+        });
+      }
+
+      const payment = await tx.payment.create({
+        data: {
+          orderId: createdOrder.id,
+          amount: totalAmount,
+          currency: "UZS",
+          method: paymentMethod || "CASH",
+          payerType: "CUSTOMER",
+          direction: "IN",
+          status: "POSTED",
+          paidAt: new Date(),
+          cashboxId: mainCashbox.id,
+          userId: req.user.id,
+          note: note || null
+        }
+      });
+
+      await tx.cashTransaction.create({
+        data: {
+          cashboxId: mainCashbox.id,
+          paymentId: payment.id,
+          type: "INCOME",
+          sourceType: "ORDER_PAYMENT",
+          sourceId: createdOrder.id,
+          amount: totalAmount,
+          currency: "UZS",
+          note: `Direct order payment ${createdOrder.orderNumber}`,
+          userId: req.user.id
+        }
+      });
+
+      await tx.cashbox.update({
+        where: { id: mainCashbox.id },
+        data: {
+          balance: { increment: totalAmount }
+        }
+      });
+
+      const fullOrder = await tx.order.findUnique({
+        where: { id: createdOrder.id },
+        include: {
+          customer: true,
+          user: true,
+          items: {
+            include: {
+              product: true,
+              allocations: {
+                include: { batch: true }
+              }
+            }
+          },
+          payments: true
+        }
+      });
+
+      return fullOrder;
+    });
+
+    res.json({
+      success: true,
+      message: "Yangi savdo muvaffaqiyatli yaratildi!",
+      order
+    });
+  } catch (error) {
+    console.error("Direct order xatosi:", error);
+
+    if (error.message && error.message.startsWith("Xato:")) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: "Yangi savdoni yaratishda xatolik yuz berdi" });
+  }
+});
+
 // ==========================================
 // --- NAQD SAVDO (CASH SALES) API ---
 // ==========================================
@@ -1007,112 +1335,126 @@ app.put('/api/cash-sales/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// 3. Savdoni Tasdiqlash (PUL TUSHADI VA TOVAR OMBORDAN KETADI)
+// 3. Savdoni Tasdiqlash / Kutilmoqdaga o'tkazish
 app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => {
     try {
         const saleId = Number(req.params.id);
+        const { status } = req.body; 
         
+        // Frontenddan "Kutilmoqda" yoki "YAKUNLANGAN" keladi
+        const targetStatus = status ? status.toUpperCase() : "YAKUNLANGAN";
+
         const sale = await prisma.sale.findUnique({ 
             where: { id: saleId },
             include: { items: true }
         });
 
         if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
-        if (sale.status === "TASDIQLANDI") return res.status(400).json({ error: "Bu savdo allaqachon tasdiqlangan!" });
+        if (sale.status === "YAKUNLANGAN" || sale.status === "TASDIQLANDI") {
+            return res.status(400).json({ error: "Bu savdo allaqachon yakunlangan!" });
+        }
 
         await prisma.$transaction(async (tx) => {
+            // 1. Statusni almashtiramiz
             await tx.sale.update({
                 where: { id: saleId },
-                data: { status: "TASDIQLANDI" }
+                data: { status: targetStatus }
             });
 
-            for (const item of sale.items) {
-                const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
-                if (!currentProd || currentProd.quantity < item.quantity) {
-                    throw new Error(`Xato: Omborda tovar qoldig'i yetarli emas!`);
-                }
+            // 🚨 2. FAQAT "YAKUNLANGAN" BO'LSA OMBOR VA KASSADAN ISHLAYMIZ
+            if (targetStatus === "YAKUNLANGAN") {
                 
-                await tx.product.update({
-                    where: { id: item.productId },
-                    data: { quantity: { decrement: item.quantity } }
+                // A) Ombordan tovarlarni yechib tashlash
+                for (const item of sale.items) {
+                    const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
+                    if (!currentProd || currentProd.quantity < item.quantity) {
+                        throw new Error(`Xato: Omborda tovar qoldig'i yetarli emas!`);
+                    }
+                    
+                    await tx.product.update({
+                        where: { id: item.productId },
+                        data: { quantity: { decrement: item.quantity } }
+                    });
+                }
+
+                // B) Kassaga pulni qo'shish
+                const mainCashbox = await tx.cashbox.findFirst({ orderBy: { id: 'asc' } });
+                if (!mainCashbox) throw new Error("Xato: Tizimda kassa topilmadi! Prisma Studio orqali bitta kassa yarating.");
+
+                await tx.cashbox.update({
+                    where: { id: mainCashbox.id },
+                    data: { balance: { increment: sale.finalAmount } }
+                });
+
+                // C) Tranzaksiyalar (Moliya) tarixiga yozish
+                await tx.transaction.create({
+                    data: {
+                        amount: sale.finalAmount, 
+                        type: "INCOME",
+                        paymentMethod: "NAQD", // Yoki karta bo'lsa KARTA
+                        reason: "Naqd Savdo",
+                        description: `Naqd savdo №${sale.id} bo'yicha to'lov`,
+                        referenceId: sale.id,
+                        cashboxId: mainCashbox.id,
+                        userId: req.user.id
+                    }
                 });
             }
-
-            // 🚨 DIQQAT: Kassaga "totalAmount" emas, "finalAmount" (Chegirmadan keyingi sof summa) tushadi!
-            await tx.transaction.create({
-                data: {
-                    amount: sale.finalAmount, 
-                    type: "INCOME",
-                    category: "Naqd Savdo",
-                    description: `Naqd savdo №${sale.id} bo'yicha to'lov`,
-                    userId: req.user.id
-                }
-            });
         });
 
-        res.json({ success: true, message: "Savdo tasdiqlandi, tovarlar ombordan yechildi va kassaga pul tushdi!" });
+        res.json({ success: true, message: `Savdo ${targetStatus} holatiga o'tdi!` });
     } catch (error) {
-        if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
+        if (error.message && error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
         res.status(500).json({ error: "Tasdiqlashda xatolik yuz berdi" });
     }
 });
 
-// 4. Savdoni O'chirish va Tovarlarni Omborga Qaytarish
+// SAVDONI O'CHIRISH (Tovarlarni va Pulni orqaga qaytarish)
 app.delete('/api/cash-sales/:id', authenticateToken, async (req, res) => {
     try {
         const saleId = Number(req.params.id);
         
-        // 1. Savdoni va unga tegishli barcha tovarlarni (items) topib olamiz
         const sale = await prisma.sale.findUnique({ 
             where: { id: saleId },
-            include: { items: true } // <--- BU MUHIM: Nimalar sotilganini bilishimiz kerak
+            include: { items: true } 
         });
         
         if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
 
-        // 2. Prisma Transaction (Agar bitta joyda xato ketsa, butun jarayon bekor qilinadi)
         await prisma.$transaction(async (tx) => {
             
-            // 3. Har bir sotilgan tovarni aylanib chiqib, omborga sonini qaytaramiz
-            for (const item of sale.items) {
-                // Eslatma: Prisma schema'da tovar soni 'quantity' yoki 'qty' deb atalgan bo'lishi mumkin. 
-                // O'zingizning schema'ga qarab moslang (quyida item.quantity deb oldim)
-                const returnedQty = item.quantity || item.qty;
+            // 1. Agar savdo allaqachon "YAKUNLANGAN" (Puli olingan) bo'lsa, kassadan pulni ayiramiz
+            if (sale.status === 'YAKUNLANGAN' || sale.status === 'TASDIQLANDI') {
+                const transaction = await tx.transaction.findFirst({
+                    where: { referenceId: saleId, reason: "Naqd Savdo", type: "INCOME" }
+                });
 
-                // A) Asosiy Product qoldig'ini tiklaymiz
-                if (item.productId) {
+                if (transaction && transaction.cashboxId) {
+                    await tx.cashbox.update({
+                        where: { id: transaction.cashboxId },
+                        data: { balance: { decrement: transaction.amount } }
+                    });
+                    
+                    await tx.transaction.delete({ where: { id: transaction.id } });
+                }
+            }
+
+            // 2. Agar "YAKUNLANGAN" bo'lgan bo'lsa, tovarlarni omborga qaytaramiz
+            if (sale.status === 'YAKUNLANGAN' || sale.status === 'TASDIQLANDI') {
+                for (const item of sale.items) {
                     await tx.product.update({
                         where: { id: item.productId },
-                        data: { quantity: { increment: returnedQty } }
-                    });
-                }
-                
-                // B) Agar tovar aniq bir partiyadan (Batch) yechilgan bo'lsa, uni ham tiklaymiz
-                // Schema'da "batchId" yoki "productBatchId" bo'lsa ishlatiladi
-                if (item.batchId) {
-                    // Agar modelingiz nomi Batch bo'lsa `tx.batch`, ProductBatch bo'lsa `tx.productBatch` bo'ladi
-                    await tx.batch.update({
-                        where: { id: item.batchId },
-                        data: { quantity: { increment: returnedQty } }
+                        data: { quantity: { increment: item.quantity } }
                     });
                 }
             }
 
-            // 4. Agar shu savdoga to'lov qilingan bo'lsa (Kutilmoqda/Yakunlangan), to'lovlarni ham o'chiramiz
-            // (Agar sizda Payment degan jadval bo'lsa, qulab tushmasligi uchun avval uni o'chirish kerak)
-            const paymentsExist = await tx.payment.count({ where: { saleId } });
-            if (paymentsExist > 0) {
-                await tx.payment.deleteMany({ where: { saleId } });
-            }
-
-            // 5. Savdo ichidagi tovarlar ro'yxatini (SaleItem) o'chiramiz
+            // 3. Oxirida savdo elementlarini va o'zini butunlay o'chiramiz
             await tx.saleItem.deleteMany({ where: { saleId } });
-            
-            // 6. Oxirida savdoning o'zini o'chiramiz
             await tx.sale.delete({ where: { id: saleId } });
         });
 
-        res.json({ success: true, message: "Savdo o'chirildi va tovarlar omborga qaytarildi!" });
+        res.json({ success: true, message: "Savdo bekor qilindi, tovarlar va pullar omborga/kassaga qaytarildi!" });
     } catch (error) {
         console.error("Delete Sale Error:", error);
         res.status(500).json({ error: "O'chirishda xatolik yuz berdi" });
@@ -1709,6 +2051,18 @@ app.post('/api/inventory/finish', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
+// --- KASSA (CASHBOX) API ---
+// ==========================================
+app.get('/api/cashboxes', authenticateToken, async (req, res) => {
+    try {
+        const cashboxes = await prisma.cashbox.findMany();
+        res.json(cashboxes);
+    } catch (error) {
+        res.status(500).json({ error: "Kassa ma'lumotlarini yuklashda xatolik" });
+    }
+});
+
+// ==========================================
 // --- SANOQ TARIXI (GET) ---
 // ==========================================
 app.get('/api/inventory/history', authenticateToken, async (req, res) => {
@@ -1728,26 +2082,58 @@ app.get('/api/inventory/history', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// 🛠 VAQTINCHALIK API: ESKI PARTIYALARNI DAVOLASH
+// ==========================================
+app.get('/api/fix-old-batches', async (req, res) => {
+    try {
+        // 1. Barcha "Tasdiqlandi" holatidagi fakturalarni olamiz
+        const invoices = await prisma.supplierInvoice.findMany({
+            where: { status: 'Tasdiqlandi' },
+            include: { items: true }
+        });
+
+        let fixedCount = 0;
+
+        // 2. Har bir fakturani va uning ichidagi tovarlarni aylanib chiqamiz
+        for (const invoice of invoices) {
+            for (const item of invoice.items) {
+                
+                // 3. Shu tovarga tegishli, nomi yozilmay qolgan (null) partiyani topamiz
+                const matchingBatches = await prisma.productBatch.findMany({
+                    where: {
+                        productId: item.productId,
+                        supplierName: null
+                    },
+                    orderBy: { id: 'asc' }
+                });
+
+                // 4. Agar shunday partiya topilsa, unga fakturadagi ta'minotchi nomini yozib qo'yamiz
+                if (matchingBatches.length > 0) {
+                    await prisma.productBatch.update({
+                        where: { id: matchingBatches[0].id },
+                        data: {
+                            supplierName: invoice.supplierName,
+                            invoiceNumber: invoice.invoiceNumber
+                        }
+                    });
+                    fixedCount++;
+                }
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            message: `Qoyil! Jami ${fixedCount} ta eski partiyaga ta'minotchi nomi muvaffaqiyatli ulandi! 🎉` 
+        });
+    } catch (error) {
+        console.error("Davolashda xatolik:", error);
+        res.status(500).json({ error: "Xatolik yuz berdi" });
+    }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
