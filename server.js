@@ -2021,56 +2021,6 @@ app.get('/api/transactions', authenticateToken, async (req, res) => {
     }
 });
 
-// ==========================================
-// 🛠 VAQTINCHALIK API: ESKI PARTIYALARNI DAVOLASH
-// ==========================================
-app.get('/api/fix-old-batches', async (req, res) => {
-    try {
-        // 1. Barcha "Tasdiqlandi" holatidagi fakturalarni olamiz
-        const invoices = await prisma.supplierInvoice.findMany({
-            where: { status: 'Tasdiqlandi' },
-            include: { items: true }
-        });
-
-        let fixedCount = 0;
-
-        // 2. Har bir fakturani va uning ichidagi tovarlarni aylanib chiqamiz
-        for (const invoice of invoices) {
-            for (const item of invoice.items) {
-                
-                // 3. Shu tovarga tegishli, nomi yozilmay qolgan (null) partiyani topamiz
-                const matchingBatches = await prisma.productBatch.findMany({
-                    where: {
-                        productId: item.productId,
-                        supplierName: null
-                    },
-                    orderBy: { id: 'asc' }
-                });
-
-                // 4. Agar shunday partiya topilsa, unga fakturadagi ta'minotchi nomini yozib qo'yamiz
-                if (matchingBatches.length > 0) {
-                    await prisma.productBatch.update({
-                        where: { id: matchingBatches[0].id },
-                        data: {
-                            supplierName: invoice.supplierName,
-                            invoiceNumber: invoice.invoiceNumber
-                        }
-                    });
-                    fixedCount++;
-                }
-            }
-        }
-
-        res.json({ 
-            success: true, 
-            message: `Qoyil! Jami ${fixedCount} ta eski partiyaga ta'minotchi nomi muvaffaqiyatli ulandi! 🎉` 
-        });
-    } catch (error) {
-        console.error("Davolashda xatolik:", error);
-        res.status(500).json({ error: "Xatolik yuz berdi" });
-    }
-});
-
 // Start Server
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
