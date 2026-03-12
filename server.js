@@ -988,7 +988,6 @@ app.get('/api/cash-sales/:id', authenticateToken, async (req, res) => {
 // 2. Yangi naqd savdo yaratish (FAQAT SAQLASH - JARAYONDA)
 app.post('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
-        // 🚨 QO'SHIMCHA PARAMETRLAR: discount va note qabul qilinadi
         const { isAnonymous, customerId, otherName, otherPhone, totalAmount, discount, finalAmount, note, items } = req.body;
         
         if (!Array.isArray(items) || items.length === 0) {
@@ -999,9 +998,9 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
             const newSale = await tx.sale.create({
                 data: {
                     totalAmount: Number(totalAmount),
-                    discount: Number(discount || 0),           // 🚨 BAZAGA YOZILADI
-                    finalAmount: Number(finalAmount || totalAmount), // 🚨 BAZAGA YOZILADI
-                    note: note || null,                        // 🚨 BAZAGA YOZILADI
+                    discount: Number(discount || 0),           
+                    finalAmount: Number(finalAmount || totalAmount), 
+                    note: note || null,                        
                     customerId: isAnonymous ? null : Number(customerId),
                     userId: req.user.id,
                     otherName: isAnonymous ? otherName : null,
@@ -1017,16 +1016,30 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
                 if (isNaN(qty) || qty <= 0) throw new Error(`Xato: ${item.name} tovarining soni noto'g'ri kiritildi!`);
                 if (isNaN(salePrice) || salePrice < 0) throw new Error(`Xato: ${item.name} tovarining narxi noto'g'ri!`);
 
-                const currentProd = await tx.product.findUnique({ where: { id: item.id } });
-                if (!currentProd) throw new Error(`Xato: Bazada ID: ${item.id} bo'lgan tovar topilmadi!`);
-                if (currentProd.quantity < qty) throw new Error(`Xato: ${item.name} tovaridan omborda yetarli qoldiq yo'q!`);
+                // 🚨 ASOSIY QOLDIQNI TEKSHIRISH
+                const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
+                if (!currentProd) throw new Error(`Xato: Bazada "${item.name}" topilmadi!`);
+                if (currentProd.quantity < qty) throw new Error(`Xato: "${item.name}" dan omborda yetarli qoldiq yo'q!`);
+
+                // 🚨 AGAR MAXSUS PARTIYA TANLANGAN BO'LSA, UNING QOLDIG'INI HAM TEKSHIRAMIZ
+                let batchIdToSave = null;
+                if (item.batchId && !String(item.batchId).startsWith('old-')) {
+                    const parsedBatchId = Number(item.batchId);
+                    const currentBatch = await tx.productBatch.findUnique({ where: { id: parsedBatchId } });
+                    
+                    if (!currentBatch || currentBatch.quantity < qty) {
+                        throw new Error(`Xato: "${item.name}" ning tanlangan partiyasida qoldiq yetarli emas!`);
+                    }
+                    batchIdToSave = parsedBatchId;
+                }
 
                 await tx.saleItem.create({ 
                     data: {
                         saleId: newSale.id, 
-                        productId: item.id,
+                        productId: item.productId,
                         quantity: qty,
-                        price: salePrice 
+                        price: salePrice,
+                        batchId: batchIdToSave
                     }
                 });
             }
@@ -1180,6 +1193,7 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
 
             // 2. Tovarlarni ombordan yechish
             for (const item of sale.items) {
+                // A) Asosiy tovardan yechish
                 const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
                 if (!currentProd || currentProd.quantity < item.quantity) {
                     throw new Error(`Xato: Omborda tovar qoldig'i yetarli emas!`);
@@ -1189,6 +1203,14 @@ app.patch('/api/cash-sales/:id/approve', authenticateToken, async (req, res) => 
                     where: { id: item.productId },
                     data: { quantity: { decrement: item.quantity } }
                 });
+
+                // 🚨 B) PARTIYADAN HAM YECHISH (Yangi mantiq)
+                if (item.batchId) {
+                    await tx.productBatch.update({
+                        where: { id: item.batchId },
+                        data: { quantity: { decrement: item.quantity } }
+                    });
+                }
             }
 
             // 🚨 3. ASOSIY KASSANI TOPIB, QOLDIQNI OSHIRISH (YANGI LOGIKA)
@@ -1920,6 +1942,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
