@@ -718,15 +718,61 @@ app.put('/api/invoices/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. Faktura holatini o'zgartirish (Masalan: Jarayonda -> Tasdiqlandi)
+// 4. Faktura holatini o'zgartirish va Omborga Partiya qilib tushirish
 app.patch('/api/invoices/:id/status', authenticateToken, async (req, res) => {
     try {
-        await prisma.supplierInvoice.update({
-            where: { id: Number(req.params.id) },
-            data: { status: req.body.status }
+        const invoiceId = Number(req.params.id);
+        const { status } = req.body;
+
+        const invoice = await prisma.supplierInvoice.findUnique({
+            where: { id: invoiceId },
+            include: { items: true }
         });
+
+        if (!invoice) return res.status(404).json({ error: "Faktura topilmadi" });
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Faktura statusini yangilash
+            await tx.supplierInvoice.update({
+                where: { id: invoiceId },
+                data: { status: status }
+            });
+
+            // 🚨 2. Agar status "Tasdiqlandi" ga o'tsa va avval tasdiqlanmagan bo'lsa
+            if (status === 'Tasdiqlandi' && invoice.status !== 'Tasdiqlandi') {
+                for (const item of invoice.items) {
+                    const qty = Number(item.count);
+                    
+                    // A) Partiya (ProductBatch) yaratamiz va TA'MINOTCHI nomini yozamiz
+                    await tx.productBatch.create({
+                        data: {
+                            productId: item.productId,
+                            initialQty: qty,
+                            quantity: qty,
+                            buyPrice: Number(item.price),
+                            salePrice: Number(item.salePrice),
+                            buyCurrency: item.currency || 'UZS',
+                            supplierName: invoice.supplierName,   // 🚨 Mana ta'minotchi nomi
+                            invoiceNumber: invoice.invoiceNumber  // 🚨 Mana faktura raqami
+                        }
+                    });
+
+                    // B) Asosiy tovar qoldig'ini oshiramiz
+                    await tx.product.update({
+                        where: { id: item.productId },
+                        data: { 
+                            quantity: { increment: qty },
+                            buyPrice: Number(item.price),
+                            salePrice: Number(item.salePrice)
+                        }
+                    });
+                }
+            }
+        });
+
         res.json({ success: true });
     } catch(e) {
+        console.error(e);
         res.status(500).json({ error: "Holatni o'zgartirishda xatolik" });
     }
 });
@@ -1980,6 +2026,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
