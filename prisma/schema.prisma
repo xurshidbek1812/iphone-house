@@ -218,6 +218,8 @@ model SaleItem {
   sale      Sale    @relation(fields: [saleId], references: [id])
   productId Int
   product   Product @relation(fields: [productId], references: [id])
+  batchId   Int?     
+  batch     ProductBatch? @relation(fields: [batchId], references: [id])
   quantity  Int
   price     Decimal 
 }
