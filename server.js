@@ -892,18 +892,72 @@ app.post('/api/contracts', authenticateToken, async (req, res) => {
 });
 
 // ==========================================
-// --- NAQD SAVDO (CASH SALES) API ---
+// --- NAQD SAVDO VA TO'LOVLAR (YANGILANGAN MOLIYA) ---
 // ==========================================
 
+// 1. Barcha savdolarni olish (Tranzaksiyalarni 'payments' qilib ulab beramiz)
 app.get('/api/cash-sales', authenticateToken, async (req, res) => {
     try {
         const sales = await prisma.sale.findMany({
             include: { customer: true, user: true, items: true },
             orderBy: { id: 'desc' }
         });
-        res.json(sales);
+
+        // Shu savdolarga tegishli barcha tranzaksiyalarni olamiz
+        const transactions = await prisma.transaction.findMany({
+            where: { reason: "Naqd Savdo", referenceId: { not: null } },
+            include: { user: true }
+        });
+
+        // Frontend kutgan formatga o'tkazamiz
+        const formattedSales = sales.map(sale => {
+            const salePayments = transactions
+                .filter(t => t.referenceId === sale.id)
+                .map(t => ({
+                    id: t.id,
+                    amount: t.amount,
+                    type: t.paymentMethod, // Naqd, Karta
+                    note: t.description,
+                    createdAt: t.createdAt,
+                    userName: t.user?.fullName
+                }));
+
+            return { ...sale, payments: salePayments };
+        });
+
+        res.json(formattedSales);
     } catch (error) {
         res.status(500).json({ error: "Naqd savdolarni olishda xatolik" });
+    }
+});
+
+// 2. Bitta savdoni yangilash (Ekranda bittasini ochganda ishlaydi)
+app.get('/api/cash-sales/:id', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        const sale = await prisma.sale.findUnique({
+            where: { id: saleId },
+            include: { customer: { include: { phones: true } }, user: true, items: true }
+        });
+        if (!sale) return res.status(404).json({error: "Savdo topilmadi"});
+
+        const transactions = await prisma.transaction.findMany({
+            where: { referenceId: saleId, reason: "Naqd Savdo" },
+            include: { user: true }
+        });
+
+        const payments = transactions.map(t => ({
+            id: t.id,
+            amount: t.amount,
+            type: t.paymentMethod,
+            note: t.description,
+            createdAt: t.createdAt,
+            userName: t.user?.fullName
+        }));
+
+        res.json({ ...sale, payments });
+    } catch (error) {
+        res.status(500).json({ error: "Olishda xato" });
     }
 });
 
@@ -961,6 +1015,75 @@ app.post('/api/cash-sales', authenticateToken, async (req, res) => {
         console.error("Naqd savdo xatosi:", error);
         if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
         res.status(500).json({ error: "Naqd savdo saqlashda xatolik yuz berdi" });
+    }
+});
+
+// 3. TO'LOV QABUL QILISH API (Qisman yoki To'liq) - MANA SHU YETISHMAYOTGAN EDI!
+app.post('/api/cash-sales/:id/payments', authenticateToken, async (req, res) => {
+    try {
+        const saleId = Number(req.params.id);
+        const { amount, type, note, status } = req.body; // status: "Yakunlangan" yoki "Kutilmoqda" keladi
+
+        const sale = await prisma.sale.findUnique({
+            where: { id: saleId },
+            include: { items: true }
+        });
+
+        if (!sale) return res.status(404).json({ error: "Savdo topilmadi!" });
+
+        await prisma.$transaction(async (tx) => {
+            // 1. Asosiy Kassani topamiz
+            const mainCashbox = await tx.cashbox.findFirst({ orderBy: { id: 'asc' } });
+            if (!mainCashbox) throw new Error("Xato: Tizimda pul tushadigan kassa topilmadi!");
+
+            // 2. Kassaga pulni qo'shamiz
+            await tx.cashbox.update({
+                where: { id: mainCashbox.id },
+                data: { balance: { increment: amount } }
+            });
+
+            // 3. Moliya (Tranzaksiya) tarixiga yozamiz
+            await tx.transaction.create({
+                data: {
+                    amount: amount,
+                    type: "INCOME",
+                    paymentMethod: type === "Plastik karta" ? "KARTA" : type === "Bank o'tkazmasi" ? "BANK" : "NAQD",
+                    reason: "Naqd Savdo",
+                    description: note || `Naqd savdo №${saleId} bo'yicha to'lov`,
+                    referenceId: saleId,
+                    cashboxId: mainCashbox.id,
+                    userId: req.user.id
+                }
+            });
+
+            // 4. Savdo statusini yangilaymiz (KUTILMOQDA -> YAKUNLANGAN)
+            const newStatus = status.toUpperCase();
+            await tx.sale.update({
+                where: { id: saleId },
+                data: { status: newStatus }
+            });
+
+            // 5. ENG MUHIMI: Agar to'lov to'liq qilinib "YAKUNLANGAN" ga o'tgan bo'lsa, endi ombordan tovarlarni yechamiz!
+            if (newStatus === 'YAKUNLANGAN' && sale.status !== 'YAKUNLANGAN') {
+                for (const item of sale.items) {
+                    const currentProd = await tx.product.findUnique({ where: { id: item.productId } });
+                    if (!currentProd || currentProd.quantity < item.quantity) {
+                        throw new Error(`Xato: "${currentProd?.name || 'Tovar'}" dan omborda yetarli qoldiq yo'q! To'lov bekor qilindi.`);
+                    }
+                    await tx.product.update({
+                        where: { id: item.productId },
+                        data: { quantity: { decrement: item.quantity } }
+                    });
+                }
+            }
+        });
+
+        res.json({ success: true, message: "To'lov muvaffaqiyatli saqlandi!" });
+    } catch (error) {
+        console.error(error);
+        // Agar o'zimiz yozgan xato bo'lsa, chiroyli qilib qaytaramiz
+        if (error.message.startsWith("Xato:")) return res.status(400).json({ error: error.message });
+        res.status(500).json({ error: "To'lovni saqlashda server xatosi" });
     }
 });
 
@@ -1748,6 +1871,7 @@ app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 
 });
+
 
 
 
