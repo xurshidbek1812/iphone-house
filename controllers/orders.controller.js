@@ -11,7 +11,15 @@ export const getOrders = async (req, res) => {
       include: {
         customer: true,
         partner: true,
-        user: true,
+        user: {
+            select: {
+                id: true,
+                fullName: true,
+                username: true,
+                role: true,
+                phone: true
+            }
+        },
         items: {
           include: {
             product: true,
@@ -205,7 +213,15 @@ export const createDirectOrder = async (req, res) => {
         where: { id: createdOrder.id },
         include: {
           customer: true,
-          user: true,
+          user: {
+            select: {
+                id: true,
+                fullName: true,
+                username: true,
+                role: true,
+                phone: true
+            }
+          },
           items: {
             include: {
               product: true,
@@ -232,5 +248,115 @@ export const createDirectOrder = async (req, res) => {
     }
 
     res.status(500).json({ error: "Yangi savdoni yaratishda xatolik yuz berdi" });
+  }
+};
+
+export const deleteOrder = async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: {
+            include: {
+              allocations: true
+            }
+          },
+          payments: true
+        }
+      });
+
+      if (!order) {
+        throw new Error("Xato: Order topilmadi!");
+      }
+
+      if (order.orderType !== "DIRECT") {
+        throw new Error("Xato: Hozircha faqat DIRECT orderni o'chirish qo'llab-quvvatlanadi!");
+      }
+
+      // 1) Batch va product qoldig'ini qaytarish
+      for (const item of order.items) {
+        for (const allocation of item.allocations) {
+          await tx.productBatch.update({
+            where: { id: allocation.batchId },
+            data: {
+              quantity: { increment: Number(allocation.quantity) }
+            }
+          });
+        }
+
+        await tx.product.update({
+          where: { id: item.productId },
+          data: {
+            quantity: { increment: Number(item.quantity) }
+          }
+        });
+      }
+
+      // 2) Kassadan pulni ayirish
+      for (const payment of order.payments) {
+        if (payment.cashboxId && payment.direction === "IN" && payment.status === "POSTED") {
+          await tx.cashbox.update({
+            where: { id: payment.cashboxId },
+            data: {
+              balance: { decrement: payment.amount }
+            }
+          });
+        }
+      }
+
+      // 3) CashTransactionlarni o'chirish
+      await tx.cashTransaction.deleteMany({
+        where: { sourceType: "ORDER_PAYMENT", sourceId: orderId }
+      });
+
+      // 4) Paymentlarni o'chirish
+      await tx.payment.deleteMany({
+        where: { orderId: orderId }
+      });
+
+      // 5) StockMovementlarni o'chirish
+      await tx.stockMovement.deleteMany({
+        where: { sourceType: "ORDER", sourceId: orderId }
+      });
+
+      // 6) Allocationlarni o'chirish
+      const orderItemIds = order.items.map((item) => item.id);
+
+      if (orderItemIds.length > 0) {
+        await tx.orderItemBatchAllocation.deleteMany({
+          where: {
+            orderItemId: { in: orderItemIds }
+          }
+        });
+      }
+
+      // 7) Order itemlarni o'chirish
+      await tx.orderItem.deleteMany({
+        where: { orderId: orderId }
+      });
+
+      // 8) Orderni o'chirish
+      await tx.order.delete({
+        where: { id: orderId }
+      });
+
+      return true;
+    });
+
+    res.json({
+      success: true,
+      message: "Order muvaffaqiyatli o'chirildi va barcha qoldiq/kassa holati tiklandi!"
+    });
+  } catch (error) {
+    console.error("Delete order xatosi:", error);
+
+    if (error.message && error.message.startsWith("Xato:")) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: "Orderni o'chirishda xatolik yuz berdi" });
   }
 };
