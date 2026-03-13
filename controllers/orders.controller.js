@@ -63,22 +63,23 @@ export const createDirectOrder = async (req, res) => {
 
       for (const item of items) {
         const productId = Number(item.productId || item.id);
+        const batchId = item.batchId ? Number(item.batchId) : null;
         const quantity = Number(item.quantity || item.qty);
         const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
 
         if (isNaN(productId) || productId <= 0) {
-          throw new Error("Xato: Tovar ID noto'g'ri!");
+            throw new Error("Xato: Tovar ID noto'g'ri!");
         }
 
         if (isNaN(quantity) || quantity <= 0) {
-          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
+            throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
         }
 
         if (isNaN(unitPrice) || unitPrice < 0) {
-          throw new Error("Xato: Tovar narxi noto'g'ri!");
+            throw new Error("Xato: Tovar narxi noto'g'ri!");
         }
 
-        const { allocations } = await allocateStockFIFO(tx, productId, quantity);
+        const { allocations } = await allocateStockFIFO(tx, productId, quantity, batchId);
 
         const lineDiscount = Number(item.discountAmount || 0);
         const lineTotal = (quantity * unitPrice) - lineDiscount;
@@ -86,12 +87,13 @@ export const createDirectOrder = async (req, res) => {
         subtotal += lineTotal;
 
         preparedItems.push({
-          productId,
-          quantity,
-          unitPrice,
-          discountAmount: lineDiscount,
-          totalAmount: lineTotal,
-          allocations
+            productId,
+            batchId,
+            quantity,
+            unitPrice,
+            discountAmount: lineDiscount,
+            totalAmount: lineTotal,
+            allocations
         });
       }
 

@@ -34,7 +34,7 @@ export const getMainCashbox = async (tx, cashboxId) => {
   return mainCashbox;
 };
 
-export const allocateStockFIFO = async (tx, productId, requestedQty) => {
+export const allocateStockFIFO = async (tx, productId, requestedQty, preferredBatchId = null) => {
   const qty = Number(requestedQty);
 
   if (isNaN(qty) || qty <= 0) {
@@ -53,6 +53,38 @@ export const allocateStockFIFO = async (tx, productId, requestedQty) => {
     throw new Error(`Xato: ${product.name} tovaridan omborda yetarli qoldiq yo'q!`);
   }
 
+  // Agar ishchi aniq batch tanlagan bo'lsa, aynan o'sha batchdan olamiz
+  if (preferredBatchId) {
+    const selectedBatch = await tx.productBatch.findFirst({
+      where: {
+        id: Number(preferredBatchId),
+        productId: Number(productId),
+        isArchived: false
+      }
+    });
+
+    if (!selectedBatch) {
+      throw new Error("Xato: Tanlangan partiya topilmadi!");
+    }
+
+    if (Number(selectedBatch.quantity) < qty) {
+      throw new Error("Xato: Tanlangan partiyada yetarli qoldiq yo'q!");
+    }
+
+    return {
+      product,
+      allocations: [
+        {
+          batchId: selectedBatch.id,
+          quantity: qty,
+          unitCost: Number(selectedBatch.buyPrice || 0),
+          unitPrice: Number(selectedBatch.salePrice || product.salePrice || 0)
+        }
+      ]
+    };
+  }
+
+  // Batch tanlanmagan bo'lsa FIFO ishlaydi
   const batches = await tx.productBatch.findMany({
     where: {
       productId: Number(productId),
