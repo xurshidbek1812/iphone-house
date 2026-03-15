@@ -1,9 +1,5 @@
 import { prisma } from '../lib/prisma.js';
-import {
-  allocateStockFIFO,
-  generateOrderNumber,
-  getMainCashbox
-} from '../utils/order.js';
+import { generateOrderNumber, allocateStockFIFO } from '../utils/order.js';
 
 export const getOrders = async (req, res) => {
   try {
@@ -12,13 +8,13 @@ export const getOrders = async (req, res) => {
         customer: true,
         partner: true,
         user: {
-            select: {
-                id: true,
-                fullName: true,
-                username: true,
-                role: true,
-                phone: true
-            }
+          select: {
+            id: true,
+            fullName: true,
+            username: true,
+            role: true,
+            phone: true
+          }
         },
         items: {
           include: {
@@ -35,8 +31,8 @@ export const getOrders = async (req, res) => {
 
     res.json(orders);
   } catch (error) {
-    console.error("Orderlarni olishda xatolik:", error);
-    res.status(500).json({ error: "Orderlarni olishda xatolik yuz berdi" });
+    console.error('Orderlarni olishda xatolik:', error);
+    res.status(500).json({ error: 'Orderlarni olishda xatolik yuz berdi' });
   }
 };
 
@@ -44,8 +40,8 @@ export const createDirectOrder = async (req, res) => {
   try {
     const {
       customerId,
-      cashboxId,
-      paymentMethod,
+      otherName,
+      otherPhone,
       note,
       discountAmount,
       items
@@ -56,44 +52,45 @@ export const createDirectOrder = async (req, res) => {
     }
 
     const order = await prisma.$transaction(async (tx) => {
-      const mainCashbox = await getMainCashbox(tx, cashboxId);
-
       let subtotal = 0;
       const preparedItems = [];
 
       for (const item of items) {
         const productId = Number(item.productId || item.id);
-        const batchId = item.batchId ? Number(item.batchId) : null;
         const quantity = Number(item.quantity || item.qty);
         const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
 
         if (isNaN(productId) || productId <= 0) {
-            throw new Error("Xato: Tovar ID noto'g'ri!");
+          throw new Error("Xato: Tovar ID noto'g'ri!");
         }
 
         if (isNaN(quantity) || quantity <= 0) {
-            throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
+          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
         }
 
         if (isNaN(unitPrice) || unitPrice < 0) {
-            throw new Error("Xato: Tovar narxi noto'g'ri!");
+          throw new Error("Xato: Tovar narxi noto'g'ri!");
         }
 
-        const { allocations } = await allocateStockFIFO(tx, productId, quantity, batchId);
+        const product = await tx.product.findUnique({
+          where: { id: productId }
+        });
+
+        if (!product) {
+          throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
+        }
 
         const lineDiscount = Number(item.discountAmount || 0);
-        const lineTotal = (quantity * unitPrice) - lineDiscount;
+        const lineTotal = quantity * unitPrice - lineDiscount;
 
         subtotal += lineTotal;
 
         preparedItems.push({
-            productId,
-            batchId,
-            quantity,
-            unitPrice,
-            discountAmount: lineDiscount,
-            totalAmount: lineTotal,
-            allocations
+          productId,
+          quantity,
+          unitPrice,
+          discountAmount: lineDiscount,
+          totalAmount: lineTotal
         });
       }
 
@@ -104,24 +101,34 @@ export const createDirectOrder = async (req, res) => {
         throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
       }
 
+      const orderNumber = await generateOrderNumber(tx);
+
+      const toUpperText = (value) => {
+        if (value === null || value === undefined) return value;
+        return String(value).trim().toUpperCase();
+      };
+
+
       const createdOrder = await tx.order.create({
         data: {
-          orderNumber: generateOrderNumber(),
-          orderType: "DIRECT",
-          status: "COMPLETED",
+          orderNumber,
+          orderType: 'DIRECT',
+          status: 'DRAFT',
           customerId: customerId ? Number(customerId) : null,
           userId: req.user.id,
           subtotal,
           discountAmount: totalDiscount,
           totalAmount,
-          paidAmount: totalAmount,
-          dueAmount: 0,
-          note: note || null
+          paidAmount: 0,
+          dueAmount: totalAmount,
+          note: note || null,
+          otherName: customerId ? null : toUpperText(otherName) || null,
+          otherPhone: customerId ? null : otherPhone || null
         }
       });
 
       for (const preparedItem of preparedItems) {
-        const createdItem = await tx.orderItem.create({
+        await tx.orderItem.create({
           data: {
             orderId: createdOrder.id,
             productId: preparedItem.productId,
@@ -131,105 +138,24 @@ export const createDirectOrder = async (req, res) => {
             totalAmount: preparedItem.totalAmount
           }
         });
-
-        for (const allocation of preparedItem.allocations) {
-          await tx.orderItemBatchAllocation.create({
-            data: {
-              orderItemId: createdItem.id,
-              batchId: allocation.batchId,
-              quantity: allocation.quantity,
-              unitCost: allocation.unitCost,
-              unitPrice: preparedItem.unitPrice
-            }
-          });
-
-          await tx.productBatch.update({
-            where: { id: allocation.batchId },
-            data: {
-              quantity: { decrement: allocation.quantity }
-            }
-          });
-
-          await tx.stockMovement.create({
-            data: {
-              productId: preparedItem.productId,
-              batchId: allocation.batchId,
-              type: "OUT",
-              quantity: allocation.quantity,
-              unitCost: allocation.unitCost,
-              unitPrice: preparedItem.unitPrice,
-              sourceType: "ORDER",
-              sourceId: createdOrder.id,
-              note: `Direct order ${createdOrder.orderNumber}`,
-              userId: req.user.id
-            }
-          });
-        }
-
-        await tx.product.update({
-          where: { id: preparedItem.productId },
-          data: {
-            quantity: { decrement: preparedItem.quantity }
-          }
-        });
       }
 
-      const payment = await tx.payment.create({
-        data: {
-          orderId: createdOrder.id,
-          amount: totalAmount,
-          currency: "UZS",
-          method: paymentMethod || "CASH",
-          payerType: "CUSTOMER",
-          direction: "IN",
-          status: "POSTED",
-          paidAt: new Date(),
-          cashboxId: mainCashbox.id,
-          userId: req.user.id,
-          note: note || null
-        }
-      });
-
-      await tx.cashTransaction.create({
-        data: {
-          cashboxId: mainCashbox.id,
-          paymentId: payment.id,
-          type: "INCOME",
-          sourceType: "ORDER_PAYMENT",
-          sourceId: createdOrder.id,
-          amount: totalAmount,
-          currency: "UZS",
-          note: `Direct order payment ${createdOrder.orderNumber}`,
-          userId: req.user.id
-        }
-      });
-
-      await tx.cashbox.update({
-        where: { id: mainCashbox.id },
-        data: {
-          balance: { increment: totalAmount }
-        }
-      });
-
-      return tx.order.findUnique({
+      return await tx.order.findUnique({
         where: { id: createdOrder.id },
         include: {
           customer: true,
           user: {
             select: {
-                id: true,
-                fullName: true,
-                username: true,
-                role: true,
-                phone: true
+              id: true,
+              fullName: true,
+              username: true,
+              role: true,
+              phone: true
             }
           },
           items: {
             include: {
-              product: true,
-              allocations: {
-                include: { batch: true }
-              }
+              product: true
             }
           },
           payments: true
@@ -239,17 +165,17 @@ export const createDirectOrder = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Yangi savdo muvaffaqiyatli yaratildi!",
+      message: 'Savdo jarayonda holatida saqlandi!',
       order
     });
   } catch (error) {
-    console.error("Direct order xatosi:", error);
+    console.error('Create draft order xatosi:', error);
 
-    if (error.message && error.message.startsWith("Xato:")) {
+    if (error.message && error.message.startsWith('Xato:')) {
       return res.status(400).json({ error: error.message });
     }
 
-    res.status(500).json({ error: "Yangi savdoni yaratishda xatolik yuz berdi" });
+    res.status(500).json({ error: 'Savdoni saqlashda xatolik yuz berdi' });
   }
 };
 
@@ -271,14 +197,13 @@ export const deleteOrder = async (req, res) => {
       });
 
       if (!order) {
-        throw new Error("Xato: Order topilmadi!");
+        throw new Error('Xato: Order topilmadi!');
       }
 
-      if (order.orderType !== "DIRECT") {
+      if (order.orderType !== 'DIRECT') {
         throw new Error("Xato: Hozircha faqat DIRECT orderni o'chirish qo'llab-quvvatlanadi!");
       }
 
-      // 1) Batch va product qoldig'ini qaytarish
       for (const item of order.items) {
         for (const allocation of item.allocations) {
           await tx.productBatch.update({
@@ -289,17 +214,18 @@ export const deleteOrder = async (req, res) => {
           });
         }
 
-        await tx.product.update({
-          where: { id: item.productId },
-          data: {
-            quantity: { increment: Number(item.quantity) }
-          }
-        });
+        if (item.allocations.length > 0) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: {
+              quantity: { increment: Number(item.quantity) }
+            }
+          });
+        }
       }
 
-      // 2) Kassadan pulni ayirish
       for (const payment of order.payments) {
-        if (payment.cashboxId && payment.direction === "IN" && payment.status === "POSTED") {
+        if (payment.cashboxId && payment.direction === 'IN' && payment.status === 'POSTED') {
           await tx.cashbox.update({
             where: { id: payment.cashboxId },
             data: {
@@ -309,22 +235,18 @@ export const deleteOrder = async (req, res) => {
         }
       }
 
-      // 3) CashTransactionlarni o'chirish
       await tx.cashTransaction.deleteMany({
-        where: { sourceType: "ORDER_PAYMENT", sourceId: orderId }
+        where: { sourceType: 'ORDER_PAYMENT', sourceId: orderId }
       });
 
-      // 4) Paymentlarni o'chirish
       await tx.payment.deleteMany({
-        where: { orderId: orderId }
+        where: { orderId }
       });
 
-      // 5) StockMovementlarni o'chirish
       await tx.stockMovement.deleteMany({
-        where: { sourceType: "ORDER", sourceId: orderId }
+        where: { sourceType: 'ORDER', sourceId: orderId }
       });
 
-      // 6) Allocationlarni o'chirish
       const orderItemIds = order.items.map((item) => item.id);
 
       if (orderItemIds.length > 0) {
@@ -335,12 +257,10 @@ export const deleteOrder = async (req, res) => {
         });
       }
 
-      // 7) Order itemlarni o'chirish
       await tx.orderItem.deleteMany({
-        where: { orderId: orderId }
+        where: { orderId }
       });
 
-      // 8) Orderni o'chirish
       await tx.order.delete({
         where: { id: orderId }
       });
@@ -350,15 +270,362 @@ export const deleteOrder = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Order muvaffaqiyatli o'chirildi va barcha qoldiq/kassa holati tiklandi!"
+      message: "Order muvaffaqiyatli o'chirildi va barcha qoldiq/kassa holati tiklandi!",
+      result
     });
   } catch (error) {
-    console.error("Delete order xatosi:", error);
+    console.error('Delete order xatosi:', error);
 
-    if (error.message && error.message.startsWith("Xato:")) {
+    if (error.message && error.message.startsWith('Xato:')) {
       return res.status(400).json({ error: error.message });
     }
 
     res.status(500).json({ error: "Orderni o'chirishda xatolik yuz berdi" });
+  }
+};
+
+export const updateOrderDraft = async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+    const { note, discountAmount, items } = req.body;
+
+    const existingOrder = await prisma.order.findUnique({
+      where: { id: orderId }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({ error: 'Order topilmadi!' });
+    }
+
+    if (existingOrder.status !== 'DRAFT') {
+      return res.status(400).json({ error: "Faqat jarayondagi savdoni tahrirlash mumkin!" });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      let subtotal = 0;
+      const preparedItems = [];
+
+      for (const item of items) {
+        const productId = Number(item.productId || item.id);
+        const quantity = Number(item.quantity || item.qty);
+        const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
+
+        if (isNaN(productId) || productId <= 0) {
+          throw new Error("Xato: Tovar ID noto'g'ri!");
+        }
+
+        if (isNaN(quantity) || quantity <= 0) {
+          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
+        }
+
+        if (isNaN(unitPrice) || unitPrice < 0) {
+          throw new Error("Xato: Tovar narxi noto'g'ri!");
+        }
+
+        const product = await tx.product.findUnique({
+          where: { id: productId }
+        });
+
+        if (!product) {
+          throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
+        }
+
+        const lineDiscount = Number(item.discountAmount || 0);
+        const lineTotal = quantity * unitPrice - lineDiscount;
+
+        subtotal += lineTotal;
+
+        preparedItems.push({
+          productId,
+          quantity,
+          unitPrice,
+          discountAmount: lineDiscount,
+          totalAmount: lineTotal
+        });
+      }
+
+      const totalDiscount = Number(discountAmount || 0);
+      const totalAmount = subtotal - totalDiscount;
+
+      if (totalAmount < 0) {
+        throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
+      }
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          subtotal,
+          discountAmount: totalDiscount,
+          totalAmount,
+          paidAmount: 0,
+          dueAmount: totalAmount,
+          note: note || null
+        }
+      });
+
+      await tx.orderItem.deleteMany({
+        where: { orderId }
+      });
+
+      for (const preparedItem of preparedItems) {
+        await tx.orderItem.create({
+          data: {
+            orderId,
+            productId: preparedItem.productId,
+            quantity: preparedItem.quantity,
+            unitPrice: preparedItem.unitPrice,
+            discountAmount: preparedItem.discountAmount,
+            totalAmount: preparedItem.totalAmount
+          }
+        });
+      }
+
+      return true;
+    });
+
+    res.json({
+      success: true,
+      message: 'Savdo muvaffaqiyatli tahrirlandi!',
+      result
+    });
+  } catch (error) {
+    console.error('Update order draft xatosi:', error);
+
+    if (error.message?.startsWith('Xato:')) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: 'Savdoni tahrirlashda xatolik yuz berdi' });
+  }
+};
+
+export const confirmOrder = async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId }
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order topilmadi!' });
+    }
+
+    if (order.status !== 'DRAFT') {
+      return res.status(400).json({ error: "Faqat jarayondagi savdoni tasdiqlash mumkin!" });
+    }
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: {
+        status: 'PAYMENT_PENDING'
+      }
+    });
+
+    res.json({
+      success: true,
+      message: "Savdo to'lov kutilmoqda holatiga o'tdi!"
+    });
+  } catch (error) {
+    console.error('Confirm order xatosi:', error);
+    res.status(500).json({ error: 'Savdoni tasdiqlashda xatolik yuz berdi' });
+  }
+};
+
+export const collectOrderPayment = async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+    const { cashboxId, amount, note } = req.body;
+
+    const paymentAmount = Number(amount);
+
+    if (!cashboxId) {
+      return res.status(400).json({ error: 'Kassa tanlanmagan!' });
+    }
+
+    if (isNaN(paymentAmount) || paymentAmount <= 0) {
+      return res.status(400).json({ error: "To'lov summasi noto'g'ri!" });
+    }
+
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const order = await tx.order.findUnique({
+          where: { id: orderId },
+          include: {
+            items: {
+              include: {
+                product: true
+              }
+            },
+            payments: true
+          }
+        });
+
+        if (!order) {
+          throw new Error('Xato: Order topilmadi!');
+        }
+
+        if (order.status !== 'PAYMENT_PENDING') {
+          throw new Error("Xato: Faqat to'lov kutilayotgan savdolar uchun to'lov olish mumkin!");
+        }
+
+        if (Number(order.dueAmount) <= 0) {
+          throw new Error("Xato: Bu savdo allaqachon to'liq yopilgan!");
+        }
+
+        if (paymentAmount > Number(order.dueAmount)) {
+          throw new Error("Xato: To'lov summasi qolgan qarzdan ko'p bo'lishi mumkin emas!");
+        }
+
+        const cashbox = await tx.cashbox.findUnique({
+          where: { id: Number(cashboxId) }
+        });
+
+        if (!cashbox) {
+          throw new Error("Xato: Tanlangan kassa topilmadi!");
+        }
+
+        const payment = await tx.payment.create({
+          data: {
+            orderId: order.id,
+            amount: paymentAmount,
+            currency: 'UZS',
+            method: cashbox.name || 'CASH',
+            payerType: 'CUSTOMER',
+            direction: 'IN',
+            status: 'POSTED',
+            paidAt: new Date(),
+            cashboxId: cashbox.id,
+            userId: req.user.id,
+            note: note || null
+          }
+        });
+
+        await tx.cashTransaction.create({
+          data: {
+            cashboxId: cashbox.id,
+            paymentId: payment.id,
+            type: 'INCOME',
+            sourceType: 'ORDER_PAYMENT',
+            sourceId: order.id,
+            amount: paymentAmount,
+            currency: 'UZS',
+            note: note || `Order #${order.orderNumber} uchun to'lov`,
+            userId: req.user.id
+          }
+        });
+
+        await tx.cashbox.update({
+          where: { id: cashbox.id },
+          data: {
+            balance: { increment: paymentAmount }
+          }
+        });
+
+        const newPaidAmount = Number(order.paidAmount) + paymentAmount;
+        const newDueAmount = Number(order.totalAmount) - newPaidAmount;
+
+        let newStatus = 'PAYMENT_PENDING';
+
+        await tx.order.update({
+          where: { id: order.id },
+          data: {
+            paidAmount: newPaidAmount,
+            dueAmount: newDueAmount < 0 ? 0 : newDueAmount
+          }
+        });
+
+        if (newDueAmount <= 0) {
+          for (const item of order.items) {
+            const { allocations } = await allocateStockFIFO(
+              tx,
+              item.productId,
+              Number(item.quantity)
+            );
+
+            for (const allocation of allocations) {
+              await tx.orderItemBatchAllocation.create({
+                data: {
+                  orderItemId: item.id,
+                  batchId: allocation.batchId,
+                  quantity: allocation.quantity,
+                  unitCost: allocation.unitCost,
+                  unitPrice: Number(item.unitPrice)
+                }
+              });
+
+              await tx.productBatch.update({
+                where: { id: allocation.batchId },
+                data: {
+                  quantity: { decrement: allocation.quantity }
+                }
+              });
+
+              await tx.stockMovement.create({
+                data: {
+                  productId: item.productId,
+                  batchId: allocation.batchId,
+                  type: 'OUT',
+                  quantity: allocation.quantity,
+                  unitCost: allocation.unitCost,
+                  unitPrice: Number(item.unitPrice),
+                  sourceType: 'ORDER',
+                  sourceId: order.id,
+                  note: `Order ${order.orderNumber} to'liq to'langandan keyin ombordan chiqarildi`,
+                  userId: req.user.id
+                }
+              });
+            }
+
+            await tx.product.update({
+              where: { id: item.productId },
+              data: {
+                quantity: { decrement: Number(item.quantity) }
+              }
+            });
+          }
+
+          await tx.order.update({
+            where: { id: order.id },
+            data: {
+              status: 'COMPLETED',
+              dueAmount: 0
+            }
+          });
+
+          newStatus = 'COMPLETED';
+        }
+
+        return {
+          paymentId: payment.id,
+          status: newStatus
+        };
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000
+      }
+    );
+
+    res.json({
+      success: true,
+      message:
+        result.status === 'COMPLETED'
+          ? "To'lov muvaffaqiyatli olindi va savdo yakunlandi!"
+          : "To'lov muvaffaqiyatli olindi!",
+      result
+    });
+  } catch (error) {
+    console.error('Collect order payment xatosi:', error);
+
+    if (error.message?.startsWith('Xato:')) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(500).json({ error: "To'lov olishda xatolik yuz berdi" });
   }
 };
