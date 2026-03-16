@@ -17,13 +17,16 @@ const router = express.Router();
 
 router.get('/', authenticateToken, getCashboxes);
 router.post('/', authenticateToken, createCashbox);
+
+router.post('/transfer', authenticateToken, transferBetweenCashboxes);
+router.get('/transactions/all', authenticateToken, getAllCashboxTransactions);
+
 router.put('/:id', authenticateToken, updateCashbox);
-router.delete('/:id', authenticateToken, deleteCashbox);
 router.patch('/:id/status', authenticateToken, updateCashboxStatus);
+router.delete('/:id', authenticateToken, deleteCashbox);
+
 router.post('/:id/deposit', authenticateToken, depositCashbox);
 router.post('/:id/withdraw', authenticateToken, withdrawCashbox);
 router.get('/:id/transactions', authenticateToken, getCashboxTransactions);
-router.post('/transfer', authenticateToken, transferBetweenCashboxes);
-router.get('/transactions/all', authenticateToken, getAllCashboxTransactions);
 
 export default router;

@@ -73,10 +73,9 @@ export const getMe = async (req, res) => {
 export const createUser = async (req, res) => {
   if (!hasPermission(req.user, PERMISSIONS.USERS_MANAGE)) {
     return res.status(403).json({
-        message: "Sizda yangi xodim qo'shish huquqi yo'q!"
+      message: "Sizda yangi xodim qo'shish huquqi yo'q!"
     });
   }
-
 
   try {
     const {
@@ -88,19 +87,13 @@ export const createUser = async (req, res) => {
       permissions
     } = req.body;
 
-    const existingUser = await prisma.user.findUnique({
-        where: { id: targetUserId },
-        select: {
-            id: true,
-            username: true,
-            fullName: true,
-            phone: true,
-            role: true,
-            password: true,
-            permissions: true
-        }
-    });
+    const normalizedUsername = String(username || '').trim().toLowerCase();
 
+    const existingUser = await prisma.user.findUnique({
+      where: {
+        username: normalizedUsername
+      }
+    });
 
     if (existingUser) {
       return res.status(400).json({
@@ -112,12 +105,12 @@ export const createUser = async (req, res) => {
 
     const newUser = await prisma.user.create({
       data: {
-        username: String(username || '').trim().toLowerCase(),
+        username: normalizedUsername,
         password: hashedPassword,
         fullName,
         phone,
         role,
-        permissions: Array.isArray(permissions) ? permissions : []
+        permissions: Array.isArray(permissions) ? permissions.filter(Boolean) : []
       },
       select: {
         id: true,
@@ -175,17 +168,10 @@ export const updateUser = async (req, res) => {
     }
 
     const existingUser = await prisma.user.findUnique({
-  where: { id: targetUserId },
-  select: {
-    id: true,
-    username: true,
-    fullName: true,
-    phone: true,
-    role: true,
-    password: true,
-    permissions: true
-  }
-});
+      where: {
+        username: String(username || '').trim().toLowerCase()
+      }
+    });
 
     const isTargetDirector = String(existingUser.role || '').toLowerCase() === 'director';
     const isRequesterDirector = String(req.user.role || '').toLowerCase() === 'director';

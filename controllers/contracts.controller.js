@@ -1102,7 +1102,7 @@ export const collectContractPayment = async (req, res) => {
             amount: paymentAmount,
             currency: 'UZS',
             note: note?.trim() || `Shartnoma ${contract.contractNumber} bo'yicha to'lov`,
-            userId: req.user.id
+            userId: req.user.id,
           }
         });
 

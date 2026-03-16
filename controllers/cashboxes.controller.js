@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { Prisma } from '@prisma/client';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { randomUUID } from 'crypto';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -88,6 +89,19 @@ export const updateCashbox = async (req, res) => {
       });
     }
 
+    const nextCurrency = currency
+      ? String(currency).trim().toUpperCase()
+      : existingCashbox.currency;
+
+    if (
+      Number(existingCashbox.balance || 0) > 0 &&
+      nextCurrency !== existingCashbox.currency
+    ) {
+      return res.status(400).json({
+        error: "Balansida mablag' bor kassaning valyutasini o'zgartirib bo'lmaydi!"
+      });
+    }
+
     const updatedCashbox = await prisma.cashbox.update({
       where: { id: cashboxId },
       data: {
@@ -132,19 +146,19 @@ export const deleteCashbox = async (req, res) => {
   try {
     const cashboxId = Number(req.params.id);
 
-    const cashbox = await prisma.cashbox.findUnique({
+    const existingCashbox = await prisma.cashbox.findUnique({
       where: { id: cashboxId }
     });
 
-    if (!cashbox) {
+    if (!existingCashbox) {
       return res.status(404).json({
         error: "Kassa topilmadi!"
       });
     }
 
-    if (Number(cashbox.balance) !== 0) {
+    if (Number(existingCashbox.balance || 0) > 0) {
       return res.status(400).json({
-        error: "Balansi 0 bo'lmagan kassani o'chirib bo'lmaydi!"
+        error: "Balansida mablag' bor kassani o'chirib bo'lmaydi. Uni faolsizlantiring."
       });
     }
 
@@ -152,9 +166,12 @@ export const deleteCashbox = async (req, res) => {
       where: { id: cashboxId }
     });
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      message: "Kassa o'chirildi"
+    });
   } catch (error) {
-    console.error("Kassani o'chirishda xatolik:", error);
+    console.error('deleteCashbox xatosi:', error);
     res.status(500).json({
       error: "Kassani o'chirishda xatolik yuz berdi"
     });
@@ -379,9 +396,15 @@ export const transferBetweenCashboxes = async (req, res) => {
     const toId = Number(toCashboxId);
     const parsedAmount = Number(amount);
 
-    if (!fromId || !toId || fromId === toId) {
+    if (!fromId || !toId) {
       return res.status(400).json({
-        error: "Qaysi kassadan va qaysi kassaga o'tkazilishi aniq bo'lishi kerak!"
+        error: "Qaysi kassadan va qaysi kassaga o'tkazilishi tanlanishi shart!"
+      });
+    }
+
+    if (fromId === toId) {
+      return res.status(400).json({
+        error: "Bir xil kassa orasida o'tkazma qilib bo'lmaydi!"
       });
     }
 
@@ -391,41 +414,37 @@ export const transferBetweenCashboxes = async (req, res) => {
       });
     }
 
-    const [fromCashbox, toCashbox] = await Promise.all([
-      prisma.cashbox.findUnique({ where: { id: fromId } }),
-      prisma.cashbox.findUnique({ where: { id: toId } })
-    ]);
-
-    if (!fromCashbox || !toCashbox) {
-      return res.status(404).json({
-        error: "Kassalardan biri topilmadi!"
+    const result = await prisma.$transaction(async (tx) => {
+      const transferGroupId = randomUUID();
+      const fromCashbox = await tx.cashbox.findUnique({
+        where: { id: fromId }
       });
-    }
 
-    if (!fromCashbox.isActive || !toCashbox.isActive) {
-      return res.status(400).json({
-        error: "Yopilgan kassa bilan o'tkazma qilib bo'lmaydi!"
+      const toCashbox = await tx.cashbox.findUnique({
+        where: { id: toId }
       });
-    }
 
-    if (fromCashbox.currency !== toCashbox.currency) {
-      return res.status(400).json({
-        error: "Turli valyutadagi kassalar orasida to'g'ridan-to'g'ri o'tkazma qilib bo'lmaydi!"
-      });
-    }
+      if (!fromCashbox || !toCashbox) {
+        throw new Error("Kassalardan biri topilmadi!");
+      }
 
-    if (Number(fromCashbox.balance) < parsedAmount) {
-      return res.status(400).json({
-        error: "Manba kassada yetarli mablag' yo'q!"
-      });
-    }
+      if (!fromCashbox.isActive || !toCashbox.isActive) {
+        throw new Error("Yopilgan kassa bilan o'tkazma qilib bo'lmaydi!");
+      }
 
-    await prisma.$transaction(async (tx) => {
+      if (fromCashbox.currency !== toCashbox.currency) {
+        throw new Error("Turli valyutadagi kassalar orasida to'g'ridan-to'g'ri o'tkazma qilib bo'lmaydi!");
+      }
+
+      if (Number(fromCashbox.balance) < parsedAmount) {
+        throw new Error("Manba kassada yetarli mablag' yo'q!");
+      }
+
       await tx.cashbox.update({
         where: { id: fromId },
         data: {
           balance: {
-            decrement: parsedAmount
+            decrement: new Prisma.Decimal(parsedAmount)
           }
         }
       });
@@ -434,7 +453,7 @@ export const transferBetweenCashboxes = async (req, res) => {
         where: { id: toId },
         data: {
           balance: {
-            increment: parsedAmount
+            increment: new Prisma.Decimal(parsedAmount)
           }
         }
       });
@@ -443,9 +462,12 @@ export const transferBetweenCashboxes = async (req, res) => {
         data: {
           cashboxId: fromId,
           type: 'TRANSFER_OUT',
-          amount: parsedAmount,
-          note: note ? String(note).trim() : `O'tkazma: ${toCashbox.name} kassasiga`,
-          userId: req.user.id
+          amount: new Prisma.Decimal(parsedAmount),
+          note: note
+            ? String(note).trim()
+            : `${toCashbox.name} kassasiga o'tkazma`,
+          userId: req.user.id,
+          transferGroupId
         }
       });
 
@@ -453,18 +475,30 @@ export const transferBetweenCashboxes = async (req, res) => {
         data: {
           cashboxId: toId,
           type: 'TRANSFER_IN',
-          amount: parsedAmount,
-          note: note ? String(note).trim() : `O'tkazma: ${fromCashbox.name} kassasidan`,
-          userId: req.user.id
+          amount: new Prisma.Decimal(parsedAmount),
+          note: note
+            ? String(note).trim()
+            : `${fromCashbox.name} kassasidan o'tkazma`,
+          userId: req.user.id,
+          transferGroupId
         }
       });
+
+      return { success: true };
     });
 
-    res.json({ success: true, message: "Kassalar orasida o'tkazma bajarildi!" });
+    res.json({
+      success: true,
+      message: "Kassalar orasida o'tkazma muvaffaqiyatli bajarildi!"
+    });
   } catch (error) {
     console.error("transferBetweenCashboxes xatosi:", error);
+
+    const safeMessage =
+      error?.message || "Kassalar orasida o'tkazma qilishda xatolik yuz berdi";
+
     res.status(500).json({
-      error: "Kassalar orasida o'tkazma qilishda xatolik yuz berdi"
+      error: safeMessage
     });
   }
 };
