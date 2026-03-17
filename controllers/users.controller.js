@@ -134,13 +134,14 @@ export const updateUser = async (req, res) => {
     const targetUserId = Number(req.params.id);
     const tokenUserId = req.user.id;
     const isSelfEdit = tokenUserId === targetUserId;
+    const canManageUsers = hasPermission(req.user, PERMISSIONS.USERS_MANAGE);
+    const requesterRole = String(req.user?.role || '').toLowerCase();
 
-    if (!isSelfEdit && !hasPermission(req.user, PERMISSIONS.USERS_MANAGE)) {
-    return res.status(403).json({
+    if (!isSelfEdit && !canManageUsers) {
+      return res.status(403).json({
         message: "Sizda bu xodimni tahrirlash huquqi yo'q!"
-    });
+      });
     }
-
 
     const {
       username,
@@ -152,10 +153,33 @@ export const updateUser = async (req, res) => {
       permissions
     } = req.body;
 
+    const existingUser = await prisma.user.findUnique({
+      where: { id: targetUserId }
+    });
+
+    if (!existingUser) {
+      return res.status(404).json({
+        message: "Foydalanuvchi topilmadi"
+      });
+    }
+
+    const isTargetDirector =
+      String(existingUser.role || '').toLowerCase() === 'director';
+
+    // Direktor akkauntini faqat direktor tahrirlay olsin
+    if (isTargetDirector && requesterRole !== 'director') {
+      return res.status(403).json({
+        message: "Direktor akkauntini faqat direktor tahrirlay oladi!"
+      });
+    }
+
+    // Username unique check
     if (username) {
+      const normalizedUsername = String(username).trim().toLowerCase();
+
       const usernameTaken = await prisma.user.findFirst({
         where: {
-          username: String(username).trim().toLowerCase(),
+          username: normalizedUsername,
           NOT: { id: targetUserId }
         }
       });
@@ -167,46 +191,37 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: {
-        username: String(username || '').trim().toLowerCase()
-      }
-    });
+    const updateData = {
+      username: username
+        ? String(username).trim().toLowerCase()
+        : existingUser.username,
 
-    const isTargetDirector = String(existingUser.role || '').toLowerCase() === 'director';
-    const isRequesterDirector = String(req.user.role || '').toLowerCase() === 'director';
+      fullName:
+        fullName !== undefined ? String(fullName).trim() : existingUser.fullName,
 
+      phone:
+        phone !== undefined ? String(phone).trim() : existingUser.phone
+    };
 
+    // Role va permission faqat boshqa user edit qilinayotganda va ruxsat bo'lsa
+    if (!isSelfEdit && canManageUsers) {
+      updateData.role =
+        !isTargetDirector && role
+          ? role
+          : existingUser.role;
 
-    if (!existingUser) {
-      return res.status(404).json({ message: "Foydalanuvchi topilmadi" });
+      updateData.permissions = {
+        set:
+          !isTargetDirector
+            ? (Array.isArray(permissions)
+                ? permissions.filter(Boolean)
+                : (existingUser.permissions || []))
+            : (existingUser.permissions || [])
+      };
     }
 
-    const updateData = {
-  username: username
-    ? String(username).trim().toLowerCase()
-    : existingUser.username,
-  fullName: fullName || existingUser.fullName,
-  phone: phone || existingUser.phone,
-  role:
-    !isSelfEdit && hasPermission(req.user, PERMISSIONS.USERS_MANAGE) && !isTargetDirector
-      ? (role || existingUser.role)
-      : existingUser.role,
-
-  permissions: {
-    set:
-      !isSelfEdit && hasPermission(req.user, PERMISSIONS.USERS_MANAGE) && !isTargetDirector
-        ? (Array.isArray(permissions)
-            ? permissions.filter(Boolean)
-            : (existingUser.permissions || []))
-        : (existingUser.permissions || [])
-  }
-};
-
-
-
     if (password) {
-      if (tokenUserId === targetUserId) {
+      if (isSelfEdit) {
         if (!currentPassword) {
           return res.status(400).json({
             message: "Parolni o'zgartirish uchun joriy (eski) parolni kiritishingiz shart!"

@@ -2,17 +2,55 @@ import { prisma } from '../lib/prisma.js';
 import { createDirectorNotification } from '../utils/notifications.js';
 import { PERMISSIONS } from '../utils/permissions.js';
 
+const ALLOWED_STATUSES = ['Jarayonda', 'Yuborildi', 'Tasdiqlandi', 'Bekor qilindi'];
+
 const hasApprovePermission = (user) => {
   const role = String(user?.role || '').toLowerCase();
   if (role === 'director') return true;
 
-  return Array.isArray(user?.permissions)
-    && user.permissions.includes(PERMISSIONS.INVOICE_APPROVE);
+  return Array.isArray(user?.permissions) &&
+    user.permissions.includes(PERMISSIONS.INVOICE_APPROVE);
 };
 
 const canManageDraftInvoice = (user) => {
   const role = String(user?.role || '').toLowerCase();
   return role === 'admin' || role === 'director' || hasApprovePermission(user);
+};
+
+const canEditInvoice = (user) => {
+  const role = String(user?.role || '').toLowerCase();
+  return role === 'admin' || role === 'director' || hasApprovePermission(user);
+};
+
+const validateInvoiceItems = (items) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return "Faktura uchun kamida 1 ta tovar bo'lishi kerak!";
+  }
+
+  for (const item of items) {
+    const productId = Number(item.id || item.productId);
+    const count = Number(item.count || 0);
+    const price = Number(item.price || 0);
+    const salePrice = Number(item.salePrice || 0);
+
+    if (!productId || Number.isNaN(productId)) {
+      return "Mahsulot ID noto'g'ri!";
+    }
+
+    if (!count || Number.isNaN(count) || count <= 0) {
+      return "Mahsulot soni noto'g'ri!";
+    }
+
+    if (Number.isNaN(price) || price < 0) {
+      return "Kirim narxi noto'g'ri!";
+    }
+
+    if (Number.isNaN(salePrice) || salePrice < 0) {
+      return "Sotuv narxi noto'g'ri!";
+    }
+  }
+
+  return null;
 };
 
 export const getInvoices = async (req, res) => {
@@ -22,14 +60,20 @@ export const getInvoices = async (req, res) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    res.json(invoices);
+    return res.json(invoices);
   } catch (error) {
     console.error('getInvoices xatosi:', error);
-    res.status(500).json({ error: "Fakturalarni olishda xatolik" });
+    return res.status(500).json({ error: "Fakturalarni olishda xatolik" });
   }
 };
 
 export const createInvoice = async (req, res) => {
+  if (!canManageDraftInvoice(req.user)) {
+    return res.status(403).json({
+      error: "Sizda faktura yaratish huquqi yo'q!"
+    });
+  }
+
   try {
     const {
       date,
@@ -42,26 +86,45 @@ export const createInvoice = async (req, res) => {
       items
     } = req.body;
 
-    if (!Array.isArray(items) || items.length === 0) {
+    if (!supplier || !String(supplier).trim()) {
       return res.status(400).json({
-        error: "Faktura uchun kamida 1 ta tovar bo'lishi kerak!"
+        error: "Ta'minotchi ko'rsatilishi shart!"
+      });
+    }
+
+    if (!invoiceNumber || !String(invoiceNumber).trim()) {
+      return res.status(400).json({
+        error: "Faktura raqami kiritilishi shart!"
+      });
+    }
+
+    const itemsError = validateInvoiceItems(items);
+    if (itemsError) {
+      return res.status(400).json({ error: itemsError });
+    }
+
+    const safeStatus = ALLOWED_STATUSES.includes(status) ? status : 'Jarayonda';
+
+    if (safeStatus !== 'Jarayonda' && safeStatus !== 'Yuborildi') {
+      return res.status(400).json({
+        error: "Yangi faktura faqat 'Jarayonda' yoki 'Yuborildi' holatida yaratilishi mumkin!"
       });
     }
 
     const newInvoice = await prisma.supplierInvoice.create({
       data: {
-        date: new Date(date),
-        supplierName: supplier,
-        invoiceNumber: String(invoiceNumber),
+        date: date ? new Date(date) : new Date(),
+        supplierName: String(supplier).trim(),
+        invoiceNumber: String(invoiceNumber).trim(),
         exchangeRate: Number(exchangeRate || 0),
         totalSum: Number(totalSum || 0),
-        status: status || 'Jarayonda',
-        userName,
+        status: safeStatus,
+        userName: userName || req.user?.fullName || req.user?.username || 'Noma’lum',
         items: {
           create: items.map((item) => ({
             productId: Number(item.id || item.productId),
             customId: Number(item.customId || 0),
-            name: item.name,
+            name: String(item.name || '').trim(),
             count: Number(item.count || 0),
             price: Number(item.price || 0),
             salePrice: Number(item.salePrice || 0),
@@ -74,14 +137,32 @@ export const createInvoice = async (req, res) => {
       include: { items: true }
     });
 
-    res.json(newInvoice);
+    if (safeStatus === 'Yuborildi') {
+      await createDirectorNotification({
+        type: 'INVOICE',
+        title: `Kirim faktura yuborildi: ${newInvoice.invoiceNumber}`,
+        message: `${newInvoice.supplierName || "Noma'lum ta'minotchi"} bo'yicha faktura direktorga yuborildi`,
+        entityType: 'SUPPLIER_INVOICE',
+        entityId: newInvoice.id,
+        status: 'Yuborildi',
+        amount: Number(newInvoice.totalSum || 0)
+      });
+    }
+
+    return res.json(newInvoice);
   } catch (error) {
     console.error('createInvoice xatosi:', error);
-    res.status(500).json({ error: "Faktura saqlashda xatolik" });
+    return res.status(500).json({ error: "Faktura saqlashda xatolik" });
   }
 };
 
 export const updateInvoice = async (req, res) => {
+  if (!canEditInvoice(req.user)) {
+    return res.status(403).json({
+      error: "Sizda fakturani tahrirlash huquqi yo'q!"
+    });
+  }
+
   try {
     const {
       date,
@@ -94,6 +175,10 @@ export const updateInvoice = async (req, res) => {
     } = req.body;
 
     const invoiceId = Number(req.params.id);
+
+    if (!invoiceId) {
+      return res.status(400).json({ error: "Faktura ID noto'g'ri!" });
+    }
 
     const existingInvoice = await prisma.supplierInvoice.findUnique({
       where: { id: invoiceId }
@@ -109,16 +194,43 @@ export const updateInvoice = async (req, res) => {
       });
     }
 
+    if (!supplier || !String(supplier).trim()) {
+      return res.status(400).json({
+        error: "Ta'minotchi ko'rsatilishi shart!"
+      });
+    }
+
+    if (!invoiceNumber || !String(invoiceNumber).trim()) {
+      return res.status(400).json({
+        error: "Faktura raqami kiritilishi shart!"
+      });
+    }
+
+    const itemsError = validateInvoiceItems(items);
+    if (itemsError) {
+      return res.status(400).json({ error: itemsError });
+    }
+
+    const safeStatus = ALLOWED_STATUSES.includes(status)
+      ? status
+      : existingInvoice.status;
+
+    if (safeStatus === 'Tasdiqlandi') {
+      return res.status(400).json({
+        error: "Tasdiqlash alohida jarayon orqali amalga oshiriladi!"
+      });
+    }
+
     await prisma.$transaction(async (tx) => {
       await tx.supplierInvoice.update({
         where: { id: invoiceId },
         data: {
-          date: new Date(date),
-          supplierName: supplier,
-          invoiceNumber: String(invoiceNumber),
+          date: date ? new Date(date) : existingInvoice.date,
+          supplierName: String(supplier).trim(),
+          invoiceNumber: String(invoiceNumber).trim(),
           exchangeRate: Number(exchangeRate || 0),
           totalSum: Number(totalSum || 0),
-          status
+          status: safeStatus
         }
       });
 
@@ -131,7 +243,7 @@ export const updateInvoice = async (req, res) => {
           supplierInvoiceId: invoiceId,
           productId: Number(item.id || item.productId),
           customId: Number(item.customId || 0),
-          name: item.name,
+          name: String(item.name || '').trim(),
           count: Number(item.count || 0),
           price: Number(item.price || 0),
           salePrice: Number(item.salePrice || 0),
@@ -142,10 +254,10 @@ export const updateInvoice = async (req, res) => {
       });
     });
 
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (error) {
     console.error('updateInvoice xatosi:', error);
-    res.status(500).json({ error: "Tahrirlashda xatolik yuz berdi" });
+    return res.status(500).json({ error: "Tahrirlashda xatolik yuz berdi" });
   }
 };
 
@@ -154,32 +266,49 @@ export const updateInvoiceStatus = async (req, res) => {
     const invoiceId = Number(req.params.id);
     const { status } = req.body;
 
+    if (!invoiceId) {
+      return res.status(400).json({ error: "Faktura ID noto'g'ri!" });
+    }
+
+    if (!ALLOWED_STATUSES.includes(status)) {
+      return res.status(400).json({
+        error: "Noto'g'ri status yuborildi!"
+      });
+    }
+
     const invoice = await prisma.supplierInvoice.findUnique({
-      where: { id: invoiceId }
+      where: { id: invoiceId },
+      include: { items: true }
     });
 
     if (!invoice) {
       return res.status(404).json({ error: "Faktura topilmadi" });
     }
 
-    if (status === 'Tasdiqlandi' && !hasApprovePermission(req.user)) {
-      return res.status(403).json({
-        error: "Sizda kirim fakturasini tasdiqlash huquqi yo'q!"
+    if (invoice.status === status) {
+      return res.status(400).json({
+        error: `Faktura allaqachon '${status}' holatida!`
       });
     }
 
-    if (status === 'Yuborildi' && !canManageDraftInvoice(req.user)) {
-      return res.status(403).json({
-        error: "Sizda fakturani yuborish huquqi yo'q!"
+    if (invoice.status === 'Tasdiqlandi') {
+      return res.status(400).json({
+        error: "Tasdiqlangan fakturaning holatini o'zgartirib bo'lmaydi!"
       });
     }
-
-    const updatedInvoice = await prisma.supplierInvoice.update({
-      where: { id: invoiceId },
-      data: { status }
-    });
 
     if (status === 'Yuborildi') {
+      if (!canManageDraftInvoice(req.user)) {
+        return res.status(403).json({
+          error: "Sizda fakturani yuborish huquqi yo'q!"
+        });
+      }
+
+      const updatedInvoice = await prisma.supplierInvoice.update({
+        where: { id: invoiceId },
+        data: { status: 'Yuborildi' }
+      });
+
       await createDirectorNotification({
         type: 'INVOICE',
         title: `Kirim faktura yuborildi: ${invoice.invoiceNumber}`,
@@ -189,30 +318,137 @@ export const updateInvoiceStatus = async (req, res) => {
         status: 'Yuborildi',
         amount: Number(invoice.totalSum || 0)
       });
+
+      return res.json({ success: true });
     }
 
-    if (status === 'Tasdiqlandi' || status === 'Bekor qilindi') {
+    if (status === 'Bekor qilindi') {
+      if (!canManageDraftInvoice(req.user)) {
+        return res.status(403).json({
+          error: "Sizda fakturani bekor qilish huquqi yo'q!"
+        });
+      }
+
+      await prisma.supplierInvoice.update({
+        where: { id: invoiceId },
+        data: { status: 'Bekor qilindi' }
+      });
+
       await prisma.notification.updateMany({
         where: {
           entityType: 'SUPPLIER_INVOICE',
           entityId: invoiceId
         },
         data: {
-          status
+          status: 'Bekor qilindi'
         }
       });
+
+      return res.json({ success: true });
     }
 
-    res.json({ success: true });
+    if (status === 'Tasdiqlandi') {
+      if (!hasApprovePermission(req.user)) {
+        return res.status(403).json({
+          error: "Sizda kirim fakturasini tasdiqlash huquqi yo'q!"
+        });
+      }
+
+      if (!['Jarayonda', 'Yuborildi'].includes(invoice.status)) {
+        return res.status(400).json({
+          error: "Bu fakturani tasdiqlab bo'lmaydi!"
+        });
+      }
+
+      if (!Array.isArray(invoice.items) || invoice.items.length === 0) {
+        return res.status(400).json({
+          error: "Fakturadagi tovarlar topilmadi!"
+        });
+      }
+
+      await prisma.$transaction(async (tx) => {
+        for (const item of invoice.items) {
+          const productId = Number(item.productId);
+          const addedQty = Number(item.count || 0);
+          const buyPrice = Number(item.price || 0);
+          const salePrice = Number(item.salePrice || 0);
+          const currency = item.currency || 'UZS';
+
+          if (!productId || addedQty <= 0) {
+            throw new Error("Faktura ichidagi mahsulot ma'lumoti noto'g'ri!");
+          }
+
+          const currentProduct = await tx.product.findUnique({
+            where: { id: productId }
+          });
+
+          if (!currentProduct) {
+            throw new Error(`Mahsulot topilmadi. Product ID: ${productId}`);
+          }
+
+          await tx.productBatch.create({
+            data: {
+              productId,
+              supplierInvoiceId: invoice.id,
+              supplierInvoiceItemId: item.id,
+              initialQty: addedQty,
+              quantity: addedQty,
+              buyPrice,
+              salePrice,
+              buyCurrency: currency,
+              supplierName: invoice.supplierName || null,
+              invoiceNumber: invoice.invoiceNumber ? String(invoice.invoiceNumber) : null
+            }
+          });
+
+          await tx.product.update({
+            where: { id: productId },
+            data: {
+              quantity: { increment: addedQty },
+              buyPrice,
+              salePrice,
+              buyCurrency: currency
+            }
+          });
+        }
+
+        await tx.supplierInvoice.update({
+          where: { id: invoiceId },
+          data: { status: 'Tasdiqlandi' }
+        });
+
+        await tx.notification.updateMany({
+          where: {
+            entityType: 'SUPPLIER_INVOICE',
+            entityId: invoiceId
+          },
+          data: {
+            status: 'Tasdiqlandi'
+          }
+        });
+      });
+
+      return res.json({ success: true });
+    }
+
+    return res.status(400).json({
+      error: "Qo'llab-quvvatlanmaydigan status!"
+    });
   } catch (error) {
     console.error('updateInvoiceStatus xatosi:', error);
-    res.status(500).json({ error: "Holatni o'zgartirishda xatolik" });
+    return res.status(500).json({
+      error: error.message || "Holatni o'zgartirishda xatolik"
+    });
   }
 };
 
 export const deleteInvoice = async (req, res) => {
   try {
     const invoiceId = Number(req.params.id);
+
+    if (!invoiceId) {
+      return res.status(400).json({ error: "Faktura ID noto'g'ri!" });
+    }
 
     const invoice = await prisma.supplierInvoice.findUnique({
       where: { id: invoiceId },
@@ -225,7 +461,6 @@ export const deleteInvoice = async (req, res) => {
       return res.status(404).json({ error: 'Faktura topilmadi!' });
     }
 
-    const isDirector = String(req.user?.role || '').toLowerCase() === 'director';
     const canApprove = hasApprovePermission(req.user);
     const canDraft = canManageDraftInvoice(req.user);
 

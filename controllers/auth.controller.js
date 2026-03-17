@@ -1,55 +1,71 @@
-import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
 
-const JWT_SECRET = process.env.JWT_SECRET;
-
 export const login = async (req, res) => {
-  const { username, password } = req.body;
-
   try {
-    const user = await prisma.user.findUnique({
-      where: { username }
-    });
+    const username = String(req.body?.username || '').trim();
+    const password = String(req.body?.password || '');
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Bunday foydalanuvchi topilmadi!"
+    if (!username || !password) {
+      return res.status(400).json({
+        error: "Login va parol kiritilishi shart!"
       });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const user = await prisma.user.findFirst({
+      where: {
+        username: {
+          equals: username,
+          mode: 'insensitive'
+        }
+      },
+      select: {
+        id: true,
+        username: true,
+        fullName: true,
+        password: true,
+        role: true,
+        phone: true,
+        permissions: true
+      }
+    });
 
-    if (!isPasswordValid) {
+    if (!user) {
+      return res.status(404).json({
+        error: "Bunday foydalanuvchi mavjud emas!"
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+
+    if (!isMatch) {
       return res.status(401).json({
-        success: false,
-        message: "Parol noto'g'ri!"
+        error: "Parol noto'g'ri!"
       });
     }
 
     const token = jwt.sign(
-      { id: user.id, role: user.role, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '24h' }
+      { id: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
     );
 
-    res.json({
-      success: true,
+    return res.json({
       token,
       user: {
         id: user.id,
+        username: user.username,
         fullName: user.fullName,
         role: user.role,
-        username: user.username,
-        permissions: user.permissions || []
+        phone: user.phone,
+        permissions: Array.isArray(user.permissions) ? user.permissions : []
       }
     });
   } catch (error) {
-    console.error("Login xatosi:", error);
-    res.status(500).json({
-      success: false,
-      message: "Serverda xatolik yuz berdi"
+    console.error('login xatosi:', error);
+    return res.status(500).json({
+      error: "Serverda xatolik yuz berdi"
     });
   }
 };

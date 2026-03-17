@@ -29,6 +29,8 @@ model User {
   notifications Notification[]
   permissions String[] @default([])
   cashboxTransactions CashboxTransaction[]
+  createdExpenses  Expense[] @relation("ExpenseCreatedBy")
+  approvedExpenses Expense[] @relation("ExpenseApprovedBy")
 }
 
 model Customer {
@@ -586,6 +588,7 @@ model Cashbox {
   cashTransactions   CashTransaction[]
   legacyTransactions Transaction[]     @relation("LegacyCashboxTransactions")
   transactions       CashboxTransaction[]
+  expenses Expense[]
 }
 
 model CashboxTransaction {
@@ -816,5 +819,29 @@ model Notification {
 
   @@index([userId, isRead])
   @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model Expense {
+  id           Int      @id @default(autoincrement())
+  amount       Decimal  @default(0)
+  note         String?
+  expenseType  String?
+  status       String   @default("Jarayonda")
+  cashboxId    Int
+  createdById  Int
+  approvedById Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  approvedAt   DateTime?
+
+  cashbox    Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
+  createdBy  User    @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User?   @relation("ExpenseApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@index([cashboxId])
+  @@index([createdById])
+  @@index([approvedById])
+  @@index([status])
   @@index([createdAt])
 }

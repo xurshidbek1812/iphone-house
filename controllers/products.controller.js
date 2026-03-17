@@ -14,6 +14,17 @@ const hasPermission = (user, permission) => {
   return Array.isArray(user?.permissions) && user.permissions.includes(permission);
 };
 
+const canIncreaseStock = (user) => {
+  return (
+    hasPermission(user, PERMISSIONS.INVOICE_APPROVE) ||
+    hasPermission(user, PERMISSIONS.PRODUCT_MANAGE)
+  );
+};
+
+const canDecreaseStock = (user) => {
+  return hasPermission(user, PERMISSIONS.PRODUCT_MANAGE);
+};
+
 export const getProducts = async (req, res) => {
   try {
     const products = await prisma.product.findMany({
@@ -123,27 +134,74 @@ export const updateProduct = async (req, res) => {
     const productId = Number(req.params.id);
     const { name, category, unit, buyPrice, salePrice } = req.body;
 
-    if (!name) {
+    if (!productId) {
+      return res.status(400).json({
+        error: "Mahsulot ID noto'g'ri!"
+      });
+    }
+
+    if (!name || !String(name).trim()) {
       return res.status(400).json({
         error: "Tovar nomi bo'sh bo'lishi mumkin emas!"
       });
     }
 
-    const normalizedName = normalizeProductName(name);
-
-    const updatedProduct = await prisma.product.update({
-      where: { id: productId },
-      data: {
-        name: name.trim(),
-        normalizedName,
-        category,
-        unit,
-        buyPrice: Number(buyPrice),
-        salePrice: Number(salePrice)
-      }
+    const existingProduct = await prisma.product.findUnique({
+      where: { id: productId }
     });
 
-    res.json({ success: true, product: updatedProduct });
+    if (!existingProduct) {
+      return res.status(404).json({
+        error: "Tovar topilmadi!"
+      });
+    }
+
+    const normalizedName = normalizeProductName(name);
+    const parsedBuyPrice = Number(buyPrice);
+    const parsedSalePrice = Number(salePrice);
+
+    if (isNaN(parsedBuyPrice) || parsedBuyPrice < 0) {
+      return res.status(400).json({
+        error: "Kirim narxi noto'g'ri!"
+      });
+    }
+
+    if (isNaN(parsedSalePrice) || parsedSalePrice < 0) {
+      return res.status(400).json({
+        error: "Sotuv narxi noto'g'ri!"
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedProduct = await tx.product.update({
+        where: { id: productId },
+        data: {
+          name: String(name).trim(),
+          normalizedName,
+          category,
+          unit,
+          buyPrice: parsedBuyPrice,
+          salePrice: parsedSalePrice
+        }
+      });
+
+      await tx.productBatch.updateMany({
+        where: {
+          productId,
+          isArchived: false
+        },
+        data: {
+          salePrice: parsedSalePrice
+        }
+      });
+
+      return updatedProduct;
+    });
+
+    res.json({
+      success: true,
+      product: result
+    });
   } catch (error) {
     console.error("Tovarni tahrirlashda xatolik:", error);
 
@@ -153,7 +211,15 @@ export const updateProduct = async (req, res) => {
       });
     }
 
-    res.status(500).json({ error: "Tovarni tahrirlashda xatolik yuz berdi" });
+    if (error.code === 'P2025') {
+      return res.status(404).json({
+        error: "Tovar topilmadi!"
+      });
+    }
+
+    res.status(500).json({
+      error: "Tovarni tahrirlashda xatolik yuz berdi"
+    });
   }
 };
 
@@ -165,13 +231,70 @@ export const deleteProduct = async (req, res) => {
   }
 
   try {
-    await prisma.product.delete({
-      where: { id: Number(req.params.id) }
+    const productId = Number(req.params.id);
+
+    const existingProduct = await prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        batches: true
+      }
     });
 
-    res.json({ success: true });
+    if (!existingProduct) {
+      return res.status(404).json({
+        error: "Tovar topilmadi!"
+      });
+    }
+
+    const hasStock = Number(existingProduct.quantity || 0) > 0;
+    if (hasStock) {
+      return res.status(400).json({
+        error: "Qoldig'i bor mahsulotni o'chirib bo'lmaydi!"
+      });
+    }
+
+    const hasBatchStock = Array.isArray(existingProduct.batches)
+      ? existingProduct.batches.some((batch) => Number(batch.quantity || 0) > 0)
+      : false;
+
+    if (hasBatchStock) {
+      return res.status(400).json({
+        error: "Aktiv partiyasida qoldiq bor mahsulotni o'chirib bo'lmaydi!"
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.productBatch.deleteMany({
+        where: { productId }
+      });
+
+      await tx.product.delete({
+        where: { id: productId }
+      });
+    });
+
+    res.json({
+      success: true,
+      message: "Tovar muvaffaqiyatli o'chirildi"
+    });
   } catch (error) {
-    res.status(500).json({ error: "O'chirishda xatolik" });
+    console.error("O'chirishda xatolik:", error);
+
+    if (error.code === 'P2025') {
+      return res.status(404).json({
+        error: "Tovar topilmadi!"
+      });
+    }
+
+    if (error.code === 'P2003') {
+      return res.status(400).json({
+        error: "Bu tovar boshqa ma'lumotlarga bog'langanligi sabab o'chirib bo'lmaydi!"
+      });
+    }
+
+    res.status(500).json({
+      error: "O'chirishda xatolik"
+    });
   }
 };
 
@@ -184,6 +307,22 @@ export const archiveProductBatch = async (req, res) => {
 
   try {
     const batchId = Number(req.params.id);
+
+    const batch = await prisma.productBatch.findUnique({
+      where: { id: batchId }
+    });
+
+    if (!batch) {
+      return res.status(404).json({
+        error: "Partiya topilmadi!"
+      });
+    }
+
+    if (Number(batch.quantity || 0) > 0) {
+      return res.status(400).json({
+        error: "Qoldig'i bor partiyani yashirib bo'lmaydi!"
+      });
+    }
 
     await prisma.productBatch.update({
       where: { id: batchId },
@@ -198,6 +337,12 @@ export const archiveProductBatch = async (req, res) => {
 };
 
 export const increaseProductStock = async (req, res) => {
+  if (!canIncreaseStock(req.user)) {
+    return res.status(403).json({
+      error: "Sizda omborga kirim qilish huquqi yo'q!"
+    });
+  }
+
   const items = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -284,6 +429,12 @@ export const increaseProductStock = async (req, res) => {
 };
 
 export const decreaseProductStock = async (req, res) => {
+  if (!canDecreaseStock(req.user)) {
+    return res.status(403).json({
+      error: "Sizda ombordan ayirish huquqi yo'q!"
+    });
+  }
+
   const items = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -310,7 +461,7 @@ export const decreaseProductStock = async (req, res) => {
           throw new Error(`Xato: Bazada ID: ${productId} bo'lgan tovar topilmadi!`);
         }
 
-        if (currentProduct.quantity < qtyToDecrease) {
+        if (Number(currentProduct.quantity || 0) < qtyToDecrease) {
           throw new Error(`Xato: ${currentProduct.name} tovaridan omborda yetarli qoldiq yo'q!`);
         }
 
@@ -325,8 +476,10 @@ export const decreaseProductStock = async (req, res) => {
             throw new Error(`Xato: Bazada tanlangan partiya topilmadi!`);
           }
 
-          if (currentBatch.quantity < qtyToDecrease) {
-            throw new Error(`Xato: ${currentProduct.name} ning tanlangan partiyasida yetarli qoldiq yo'q!`);
+          if (Number(currentBatch.quantity || 0) < qtyToDecrease) {
+            throw new Error(
+              `Xato: ${currentProduct.name} ning tanlangan partiyasida yetarli qoldiq yo'q!`
+            );
           }
 
           await tx.productBatch.update({

@@ -18,7 +18,7 @@
 
 */
 -- DropForeignKey
-ALTER TABLE "ContractItem" DROP CONSTRAINT "ContractItem_contractId_fkey";
+ALTER TABLE "ContractItem" DROP CONSTRAINT IF EXISTS "ContractItem_contractId_fkey";
 
 -- DropForeignKey
 ALTER TABLE "CustomerAddress" DROP CONSTRAINT "CustomerAddress_customerId_fkey";
@@ -38,21 +38,11 @@ ALTER TABLE "InventoryItem" DROP CONSTRAINT "InventoryItem_inventoryActId_fkey";
 -- DropForeignKey
 ALTER TABLE "Payment" DROP CONSTRAINT "Payment_contractId_fkey";
 
--- DropForeignKey
-ALTER TABLE "Sale" DROP CONSTRAINT "Sale_customerId_fkey";
-
--- DropForeignKey
-ALTER TABLE "Sale" DROP CONSTRAINT "Sale_userId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SaleItem" DROP CONSTRAINT "SaleItem_productId_fkey";
-
--- DropForeignKey
-ALTER TABLE "SaleItem" DROP CONSTRAINT "SaleItem_saleId_fkey";
 
 -- AlterTable
-ALTER TABLE "Contract" DROP COLUMN "date",
-DROP COLUMN "paidAmount",
+ALTER TABLE "Contract"
+DROP COLUMN IF EXISTS "date",
+DROP COLUMN IF EXISTS "paidAmount",
 ADD COLUMN     "cancelledAt" TIMESTAMP(3),
 ADD COLUMN     "cashboxId" INTEGER NOT NULL,
 ADD COLUMN     "confirmedAt" TIMESTAMP(3),
@@ -68,7 +58,7 @@ ALTER COLUMN "durationMonths" SET DEFAULT 0,
 ALTER COLUMN "status" SET DEFAULT 'DRAFT';
 
 -- AlterTable
-ALTER TABLE "ContractItem" DROP COLUMN "price",
+ALTER TABLE "ContractItem" DROP COLUMN IF EXISTS "price",
 ADD COLUMN     "totalAmount" DECIMAL(65,30) NOT NULL,
 ADD COLUMN     "unitPrice" DECIMAL(65,30) NOT NULL,
 ALTER COLUMN "quantity" SET DATA TYPE DOUBLE PRECISION;
@@ -78,8 +68,9 @@ ALTER TABLE "InventoryAct" ADD COLUMN     "isStockUpdated" BOOLEAN NOT NULL DEFA
 ADD COLUMN     "userId" INTEGER;
 
 -- AlterTable
-ALTER TABLE "Payment" DROP COLUMN "date",
-DROP COLUMN "type",
+ALTER TABLE "Payment"
+DROP COLUMN IF EXISTS "date",
+DROP COLUMN IF EXISTS "type",
 ADD COLUMN     "cashboxId" INTEGER,
 ADD COLUMN     "currency" TEXT NOT NULL DEFAULT 'UZS',
 ADD COLUMN     "direction" TEXT NOT NULL DEFAULT 'IN',
@@ -111,12 +102,6 @@ ALTER COLUMN "category" DROP NOT NULL;
 
 -- AlterTable
 ALTER TABLE "User" ADD COLUMN     "phone" TEXT;
-
--- DropTable
-DROP TABLE "Sale";
-
--- DropTable
-DROP TABLE "SaleItem";
 
 -- CreateTable
 CREATE TABLE "BlacklistRequest" (
