@@ -20,6 +20,7 @@ import cashSalesRoutes from './routes/cash-sales.routes.js';
 import inventoryRoutes from './routes/inventory.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import expensesRoutes from './routes/expenses.routes.js';
+import expenseCategoriesRoutes from './routes/expense-categories.routes.js';
 
 import { getRegions } from './controllers/customers.controller.js';
 
@@ -80,5 +81,6 @@ app.use('/api/suppliers', suppliersRoutes);
 app.use('/api/cash-sales', cashSalesRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/expenses', expensesRoutes);
+app.use('/api/expense-categories', expenseCategoriesRoutes);
 
 export default app;

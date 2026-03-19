@@ -43,7 +43,6 @@ export const createDirectOrder = async (req, res) => {
       otherName,
       otherPhone,
       note,
-      discountAmount,
       items
     } = req.body;
 
@@ -53,6 +52,7 @@ export const createDirectOrder = async (req, res) => {
 
     const order = await prisma.$transaction(async (tx) => {
       let subtotal = 0;
+      let totalDiscount = 0;
       const preparedItems = [];
 
       for (const item of items) {
@@ -68,6 +68,10 @@ export const createDirectOrder = async (req, res) => {
           throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
         }
 
+        if (!Number.isInteger(quantity)) {
+          throw new Error("Xato: Tovar soni butun son bo'lishi shart!");
+        }
+
         if (isNaN(unitPrice) || unitPrice < 0) {
           throw new Error("Xato: Tovar narxi noto'g'ri!");
         }
@@ -80,10 +84,23 @@ export const createDirectOrder = async (req, res) => {
           throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
         }
 
+        const lineSubtotal = quantity * unitPrice;
         const lineDiscount = Number(item.discountAmount || 0);
-        const lineTotal = quantity * unitPrice - lineDiscount;
 
-        subtotal += lineTotal;
+        if (isNaN(lineDiscount) || lineDiscount < 0) {
+          throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
+        }
+
+        if (lineDiscount > lineSubtotal) {
+          throw new Error(
+            `Xato: ${product.name} uchun chegirma tovar summasidan katta bo'lishi mumkin emas!`
+          );
+        }
+
+        const lineTotal = lineSubtotal - lineDiscount;
+
+        subtotal += lineSubtotal;
+        totalDiscount += lineDiscount;
 
         preparedItems.push({
           productId,
@@ -94,7 +111,6 @@ export const createDirectOrder = async (req, res) => {
         });
       }
 
-      const totalDiscount = Number(discountAmount || 0);
       const totalAmount = subtotal - totalDiscount;
 
       if (totalAmount < 0) {
@@ -107,7 +123,6 @@ export const createDirectOrder = async (req, res) => {
         if (value === null || value === undefined) return value;
         return String(value).trim().toUpperCase();
       };
-
 
       const createdOrder = await tx.order.create({
         data: {
@@ -287,26 +302,38 @@ export const deleteOrder = async (req, res) => {
 export const updateOrderDraft = async (req, res) => {
   try {
     const orderId = Number(req.params.id);
-    const { note, discountAmount, items } = req.body;
-
-    const existingOrder = await prisma.order.findUnique({
-      where: { id: orderId }
-    });
-
-    if (!existingOrder) {
-      return res.status(404).json({ error: 'Order topilmadi!' });
-    }
-
-    if (existingOrder.status !== 'DRAFT') {
-      return res.status(400).json({ error: "Faqat jarayondagi savdoni tahrirlash mumkin!" });
-    }
+    const {
+      customerId,
+      otherName,
+      otherPhone,
+      note,
+      items
+    } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
     }
 
-    const result = await prisma.$transaction(async (tx) => {
+    const existingOrder = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: true
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({ error: "Savdo topilmadi!" });
+    }
+
+    if (String(existingOrder.status).toUpperCase() !== 'DRAFT') {
+      return res.status(400).json({
+        error: "Faqat jarayondagi savdoni tahrirlash mumkin!"
+      });
+    }
+
+    const updatedOrder = await prisma.$transaction(async (tx) => {
       let subtotal = 0;
+      let totalDiscount = 0;
       const preparedItems = [];
 
       for (const item of items) {
@@ -322,6 +349,10 @@ export const updateOrderDraft = async (req, res) => {
           throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
         }
 
+        if (!Number.isInteger(quantity)) {
+          throw new Error("Xato: Tovar soni butun son bo'lishi shart!");
+        }
+
         if (isNaN(unitPrice) || unitPrice < 0) {
           throw new Error("Xato: Tovar narxi noto'g'ri!");
         }
@@ -334,10 +365,23 @@ export const updateOrderDraft = async (req, res) => {
           throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
         }
 
+        const lineSubtotal = quantity * unitPrice;
         const lineDiscount = Number(item.discountAmount || 0);
-        const lineTotal = quantity * unitPrice - lineDiscount;
 
-        subtotal += lineTotal;
+        if (isNaN(lineDiscount) || lineDiscount < 0) {
+          throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
+        }
+
+        if (lineDiscount > lineSubtotal) {
+          throw new Error(
+            `Xato: ${product.name} uchun chegirma tovar summasidan katta bo'lishi mumkin emas!`
+          );
+        }
+
+        const lineTotal = lineSubtotal - lineDiscount;
+
+        subtotal += lineSubtotal;
+        totalDiscount += lineDiscount;
 
         preparedItems.push({
           productId,
@@ -348,22 +392,28 @@ export const updateOrderDraft = async (req, res) => {
         });
       }
 
-      const totalDiscount = Number(discountAmount || 0);
       const totalAmount = subtotal - totalDiscount;
 
       if (totalAmount < 0) {
         throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
       }
 
+      const toUpperText = (value) => {
+        if (value === null || value === undefined) return value;
+        return String(value).trim().toUpperCase();
+      };
+
       await tx.order.update({
         where: { id: orderId },
         data: {
+          customerId: customerId ? Number(customerId) : null,
           subtotal,
           discountAmount: totalDiscount,
           totalAmount,
-          paidAmount: 0,
-          dueAmount: totalAmount,
-          note: note || null
+          dueAmount: totalAmount - Number(existingOrder.paidAmount || 0),
+          note: note || null,
+          otherName: customerId ? null : toUpperText(otherName) || null,
+          otherPhone: customerId ? null : otherPhone || null
         }
       });
 
@@ -384,22 +434,42 @@ export const updateOrderDraft = async (req, res) => {
         });
       }
 
-      return true;
+      return await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          customer: true,
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              username: true,
+              role: true,
+              phone: true
+            }
+          },
+          items: {
+            include: {
+              product: true
+            }
+          },
+          payments: true
+        }
+      });
     });
 
     res.json({
       success: true,
-      message: 'Savdo muvaffaqiyatli tahrirlandi!',
-      result
+      message: 'Savdo yangilandi!',
+      order: updatedOrder
     });
   } catch (error) {
-    console.error('Update order draft xatosi:', error);
+    console.error('Update draft order xatosi:', error);
 
-    if (error.message?.startsWith('Xato:')) {
+    if (error.message && error.message.startsWith('Xato:')) {
       return res.status(400).json({ error: error.message });
     }
 
-    res.status(500).json({ error: 'Savdoni tahrirlashda xatolik yuz berdi' });
+    res.status(500).json({ error: 'Savdoni yangilashda xatolik yuz berdi' });
   }
 };
 

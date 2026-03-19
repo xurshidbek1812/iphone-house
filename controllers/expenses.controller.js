@@ -21,6 +21,11 @@ export const getExpenses = async (req, res) => {
     const expenses = await prisma.expense.findMany({
       include: {
         cashbox: true,
+        expenseCategory: {
+          include: {
+            group: true
+          }
+        },
         createdBy: {
           select: { id: true, fullName: true, username: true }
         },
@@ -54,11 +59,11 @@ export const createExpense = async (req, res) => {
   }
 
   try {
-    const { cashboxId, amount, note } = req.body;
+    const { cashboxId, amount, note, expenseCategoryId } = req.body;
 
-    if (!cashboxId || !amount) {
+    if (!cashboxId || !amount || !expenseCategoryId) {
       return res.status(400).json({
-        error: "Kassa va summa majburiy!"
+        error: "Kassa, summa va xarajat moddasi majburiy!"
       });
     }
 
@@ -72,12 +77,18 @@ export const createExpense = async (req, res) => {
       data: {
         cashboxId: Number(cashboxId),
         amount: Number(amount),
-        note: String(note).trim(),
+        note: String(note || '').trim() || null,
+        expenseCategoryId: Number(expenseCategoryId),
         createdById: req.user.id,
         status: 'Jarayonda'
       },
       include: {
         cashbox: true,
+        expenseCategory: {
+          include: {
+            group: true
+          }
+        },
         createdBy: {
           select: {
             id: true,
@@ -116,7 +127,14 @@ export const approveExpense = async (req, res) => {
 
     const expense = await prisma.expense.findUnique({
       where: { id: expenseId },
-      include: { cashbox: true }
+      include: {
+        cashbox: true,
+        expenseCategory: {
+          include: {
+            group: true
+          }
+        }
+      }
     });
 
     if (!expense) {
@@ -154,7 +172,9 @@ export const approveExpense = async (req, res) => {
           cashboxId: expense.cashboxId,
           amount,
           type: 'EXPENSE',
-          note: expense.note || "Tasdiqlangan xarajat",
+          note:
+            expense.note ||
+            `${expense.expenseCategory?.group?.name || ''} / ${expense.expenseCategory?.name || 'Xarajat'}`,
           userId: req.user.id
         }
       });

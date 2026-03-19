@@ -826,7 +826,6 @@ model Expense {
   id           Int      @id @default(autoincrement())
   amount       Decimal  @default(0)
   note         String?
-  expenseType  String?
   status       String   @default("Jarayonda")
   cashboxId    Int
   createdById  Int
@@ -835,6 +834,9 @@ model Expense {
   updatedAt    DateTime @updatedAt
   approvedAt   DateTime?
 
+  expenseCategoryId Int
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
+
   cashbox    Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
   createdBy  User    @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   approvedBy User?   @relation("ExpenseApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
@@ -842,6 +844,36 @@ model Expense {
   @@index([cashboxId])
   @@index([createdById])
   @@index([approvedById])
+  @@index([expenseCategoryId])
   @@index([status])
   @@index([createdAt])
+}
+
+model ExpenseCategoryGroup {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categories ExpenseCategory[]
+
+  @@index([name])
+}
+
+model ExpenseCategory {
+  id        Int      @id @default(autoincrement())
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  groupId Int
+  group   ExpenseCategoryGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  expenses Expense[]
+
+  @@unique([groupId, name])
+  @@index([groupId])
+  @@index([name])
 }

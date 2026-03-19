@@ -12,5 +12,6 @@ export const PERMISSIONS = {
   PRODUCT_MANAGE: 'product.manage',
 
   CATEGORY_MANAGE: 'category.manage',
-  SUPPLIER_MANAGE: 'supplier.manage'
+  SUPPLIER_MANAGE: 'supplier.manage',
+  EXPENSE_CATEGORY_MANAGE: 'expense_category.manage',
 };
