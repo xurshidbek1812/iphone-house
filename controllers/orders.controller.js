@@ -1,35 +1,201 @@
 import { prisma } from '../lib/prisma.js';
 import { generateOrderNumber, allocateStockFIFO } from '../utils/order.js';
 
+const validateDirectSaleItem = async (tx, item) => {
+  const productId = Number(item.productId || item.id);
+  const quantity = Number(item.quantity || item.qty);
+  const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
+  const lineDiscount = Number(item.discountAmount || 0);
+  const batchId =
+    item.batchId === null || item.batchId === undefined || item.batchId === ''
+      ? null
+      : Number(item.batchId);
+  const scanType = String(item.scanType || '').trim().toUpperCase();
+
+  if (isNaN(productId) || productId <= 0) {
+    throw new Error("Xato: Tovar ID noto'g'ri!");
+  }
+
+  if (isNaN(quantity) || quantity <= 0) {
+    throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
+  }
+
+  if (!Number.isInteger(quantity)) {
+    throw new Error("Xato: Tovar soni butun son bo'lishi shart!");
+  }
+
+  if (isNaN(unitPrice) || unitPrice < 0) {
+    throw new Error("Xato: Tovar narxi noto'g'ri!");
+  }
+
+  const product = await tx.product.findUnique({
+    where: { id: productId }
+  });
+
+  if (!product) {
+    throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
+  }
+
+  const lineSubtotal = quantity * unitPrice;
+
+  if (isNaN(lineDiscount) || lineDiscount < 0) {
+    throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
+  }
+
+  if (lineDiscount > lineSubtotal) {
+    throw new Error(
+      `Xato: ${product.name} uchun chegirma tovar summasidan katta bo'lishi mumkin emas!`
+    );
+  }
+
+  if (scanType && scanType !== 'BATCH') {
+    throw new Error(
+      "Xato: Savdoda faqat tasdiqlangan partiya orqali skaner qilingan mahsulot ishlatiladi!"
+    );
+  }
+
+  if (!batchId) {
+    throw new Error(
+      `Xato: ${product.name} savdoda faqat tasdiqlangan partiya bilan kelishi shart!`
+    );
+  }
+
+  const batch = await tx.productBatch.findUnique({
+    where: { id: batchId },
+    include: {
+      product: {
+        select: {
+          id: true,
+          name: true,
+          customId: true
+        }
+      }
+    }
+  });
+
+  if (!batch || batch.isArchived) {
+    throw new Error("Xato: Tanlangan partiya topilmadi yoki faol emas!");
+  }
+
+  if (Number(batch.productId) !== Number(productId)) {
+    throw new Error("Xato: Mahsulot va partiya mos kelmadi!");
+  }
+
+  if (Number(batch.quantity) < quantity) {
+    throw new Error(
+      `Xato: ${batch.product?.name || product.name} uchun partiyada yetarli qoldiq yo'q!`
+    );
+  }
+
+  const lineTotal = lineSubtotal - lineDiscount;
+
+  return {
+    productId,
+    quantity,
+    unitPrice,
+    discountAmount: lineDiscount,
+    totalAmount: lineTotal,
+    batchId,
+    scanType: 'BATCH'
+  };
+};
+
 export const getOrders = async (req, res) => {
   try {
-    const orders = await prisma.order.findMany({
-      include: {
-        customer: true,
-        partner: true,
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            username: true,
-            role: true,
-            phone: true
-          }
-        },
-        items: {
-          include: {
-            product: true,
-            allocations: {
-              include: { batch: true }
-            }
-          }
-        },
-        payments: true
-      },
-      orderBy: { id: 'desc' }
-    });
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
 
-    res.json(orders);
+    const search = String(req.query.search || '').trim();
+    const status = String(req.query.status || 'ALL').trim().toUpperCase();
+
+    const where = {
+      ...(status !== 'ALL' ? { status } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                orderNumber: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              },
+              {
+                otherName: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              },
+              {
+                otherPhone: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              },
+              {
+                customer: {
+                  firstName: {
+                    contains: search,
+                    mode: 'insensitive'
+                  }
+                }
+              },
+              {
+                customer: {
+                  lastName: {
+                    contains: search,
+                    mode: 'insensitive'
+                  }
+                }
+              }
+            ]
+          }
+        : {})
+    };
+
+    const [total, orders] = await Promise.all([
+      prisma.order.count({ where }),
+      prisma.order.findMany({
+        where,
+        include: {
+          customer: {
+            include: {
+              phones: true
+            }
+          },
+          partner: true,
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              username: true,
+              role: true,
+              phone: true
+            }
+          },
+          items: {
+            include: {
+              product: true,
+              allocations: {
+                include: { batch: true }
+              }
+            }
+          },
+          payments: true
+        },
+        orderBy: { id: 'desc' },
+        skip,
+        take: limit
+      })
+    ]);
+
+    res.json({
+      items: orders,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error('Orderlarni olishda xatolik:', error);
     res.status(500).json({ error: 'Orderlarni olishda xatolik yuz berdi' });
@@ -38,13 +204,7 @@ export const getOrders = async (req, res) => {
 
 export const createDirectOrder = async (req, res) => {
   try {
-    const {
-      customerId,
-      otherName,
-      otherPhone,
-      note,
-      items
-    } = req.body;
+    const { customerId, otherName, otherPhone, note, items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
@@ -56,59 +216,12 @@ export const createDirectOrder = async (req, res) => {
       const preparedItems = [];
 
       for (const item of items) {
-        const productId = Number(item.productId || item.id);
-        const quantity = Number(item.quantity || item.qty);
-        const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
+        const preparedItem = await validateDirectSaleItem(tx, item);
 
-        if (isNaN(productId) || productId <= 0) {
-          throw new Error("Xato: Tovar ID noto'g'ri!");
-        }
+        subtotal += preparedItem.quantity * preparedItem.unitPrice;
+        totalDiscount += preparedItem.discountAmount;
 
-        if (isNaN(quantity) || quantity <= 0) {
-          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
-        }
-
-        if (!Number.isInteger(quantity)) {
-          throw new Error("Xato: Tovar soni butun son bo'lishi shart!");
-        }
-
-        if (isNaN(unitPrice) || unitPrice < 0) {
-          throw new Error("Xato: Tovar narxi noto'g'ri!");
-        }
-
-        const product = await tx.product.findUnique({
-          where: { id: productId }
-        });
-
-        if (!product) {
-          throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
-        }
-
-        const lineSubtotal = quantity * unitPrice;
-        const lineDiscount = Number(item.discountAmount || 0);
-
-        if (isNaN(lineDiscount) || lineDiscount < 0) {
-          throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
-        }
-
-        if (lineDiscount > lineSubtotal) {
-          throw new Error(
-            `Xato: ${product.name} uchun chegirma tovar summasidan katta bo'lishi mumkin emas!`
-          );
-        }
-
-        const lineTotal = lineSubtotal - lineDiscount;
-
-        subtotal += lineSubtotal;
-        totalDiscount += lineDiscount;
-
-        preparedItems.push({
-          productId,
-          quantity,
-          unitPrice,
-          discountAmount: lineDiscount,
-          totalAmount: lineTotal
-        });
+        preparedItems.push(preparedItem);
       }
 
       const totalAmount = subtotal - totalDiscount;
@@ -302,13 +415,7 @@ export const deleteOrder = async (req, res) => {
 export const updateOrderDraft = async (req, res) => {
   try {
     const orderId = Number(req.params.id);
-    const {
-      customerId,
-      otherName,
-      otherPhone,
-      note,
-      items
-    } = req.body;
+    const { customerId, otherName, otherPhone, note, items } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
@@ -337,59 +444,12 @@ export const updateOrderDraft = async (req, res) => {
       const preparedItems = [];
 
       for (const item of items) {
-        const productId = Number(item.productId || item.id);
-        const quantity = Number(item.quantity || item.qty);
-        const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
+        const preparedItem = await validateDirectSaleItem(tx, item);
 
-        if (isNaN(productId) || productId <= 0) {
-          throw new Error("Xato: Tovar ID noto'g'ri!");
-        }
+        subtotal += preparedItem.quantity * preparedItem.unitPrice;
+        totalDiscount += preparedItem.discountAmount;
 
-        if (isNaN(quantity) || quantity <= 0) {
-          throw new Error("Xato: Tovar soni 0 dan katta bo'lishi shart!");
-        }
-
-        if (!Number.isInteger(quantity)) {
-          throw new Error("Xato: Tovar soni butun son bo'lishi shart!");
-        }
-
-        if (isNaN(unitPrice) || unitPrice < 0) {
-          throw new Error("Xato: Tovar narxi noto'g'ri!");
-        }
-
-        const product = await tx.product.findUnique({
-          where: { id: productId }
-        });
-
-        if (!product) {
-          throw new Error(`Xato: ID ${productId} bo'lgan tovar topilmadi!`);
-        }
-
-        const lineSubtotal = quantity * unitPrice;
-        const lineDiscount = Number(item.discountAmount || 0);
-
-        if (isNaN(lineDiscount) || lineDiscount < 0) {
-          throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
-        }
-
-        if (lineDiscount > lineSubtotal) {
-          throw new Error(
-            `Xato: ${product.name} uchun chegirma tovar summasidan katta bo'lishi mumkin emas!`
-          );
-        }
-
-        const lineTotal = lineSubtotal - lineDiscount;
-
-        subtotal += lineSubtotal;
-        totalDiscount += lineDiscount;
-
-        preparedItems.push({
-          productId,
-          quantity,
-          unitPrice,
-          discountAmount: lineDiscount,
-          totalAmount: lineTotal
-        });
+        preparedItems.push(preparedItem);
       }
 
       const totalAmount = subtotal - totalDiscount;

@@ -43,7 +43,7 @@ export const getDashboard = async (req, res) => {
       todayPayments,
       lowStockProducts,
       topProductRows,
-      expenses,
+      rawExpenses,
       pendingContracts,
       blacklistRequests
     ] = await Promise.all([
@@ -63,7 +63,8 @@ export const getDashboard = async (req, res) => {
           id: true,
           name: true,
           balance: true,
-          currency: true
+          currency: true,
+          isActive: true
         }
       }),
 
@@ -163,7 +164,8 @@ export const getDashboard = async (req, res) => {
           id: true,
           amount: true,
           contractId: true,
-          orderId: true
+          orderId: true,
+          paidAt: true
         }
       }),
 
@@ -202,10 +204,30 @@ export const getDashboard = async (req, res) => {
 
       prisma.expense.findMany({
         include: {
-          user: {
+          cashbox: {
             select: {
+              id: true,
+              name: true,
+              currency: true
+            }
+          },
+          createdBy: {
+            select: {
+              id: true,
               fullName: true,
               username: true
+            }
+          },
+          approvedBy: {
+            select: {
+              id: true,
+              fullName: true,
+              username: true
+            }
+          },
+          expenseCategory: {
+            include: {
+              group: true
             }
           }
         },
@@ -225,7 +247,11 @@ export const getDashboard = async (req, res) => {
               phones: true
             }
           }
-        }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        take: 20
       }),
 
       prisma.blacklistRequest.findMany({
@@ -262,6 +288,28 @@ export const getDashboard = async (req, res) => {
         };
       })
     );
+
+    const expenses = rawExpenses.map((exp) => ({
+      id: exp.id,
+      name:
+        exp.expenseCategory?.group?.name && exp.expenseCategory?.name
+          ? `${exp.expenseCategory.group.name} / ${exp.expenseCategory.name}`
+          : exp.expenseCategory?.name ||
+            exp.expenseType ||
+            exp.note ||
+            'Xarajat',
+      amount: Number(exp.amount || 0),
+      createdAt: exp.createdAt,
+      status: exp.status,
+      note: exp.note || '-',
+      cashbox: exp.cashbox || null,
+      user: {
+        fullName: exp.createdBy?.fullName || null,
+        username: exp.createdBy?.username || null
+      },
+      createdBy: exp.createdBy || null,
+      approvedBy: exp.approvedBy || null
+    }));
 
     const inventoryValue = products.reduce((sum, product) => {
       return sum + Number(product.quantity || 0) * Number(product.buyPrice || 0);
@@ -402,9 +450,7 @@ export const getDashboard = async (req, res) => {
       date: item.createdAt,
       dateText: new Date(item.createdAt).toLocaleString('uz-UZ'),
       isRead: false,
-      status: item.type === 'ADD'
-        ? "Qo'shish so'rovi"
-        : "Chiqarish so'rovi",
+      status: item.type === 'ADD' ? "Qo'shish so'rovi" : "Chiqarish so'rovi",
       requestStatus: item.status,
       reason: item.reason
     }));

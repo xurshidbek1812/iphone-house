@@ -55,12 +55,59 @@ const validateInvoiceItems = (items) => {
 
 export const getInvoices = async (req, res) => {
   try {
-    const invoices = await prisma.supplierInvoice.findMany({
-      include: { items: true },
-      orderBy: { createdAt: 'desc' }
-    });
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
 
-    return res.json(invoices);
+    const search = String(req.query.search || '').trim();
+    const status = String(req.query.status || 'ALL').trim();
+
+    const where = {
+      ...(status !== 'ALL' ? { status } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                supplierName: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              },
+              {
+                invoiceNumber: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              },
+              {
+                userName: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              }
+            ]
+          }
+        : {})
+    };
+
+    const [total, invoices] = await Promise.all([
+      prisma.supplierInvoice.count({ where }),
+      prisma.supplierInvoice.findMany({
+        where,
+        include: { items: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      })
+    ]);
+
+    return res.json({
+      items: invoices,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error('getInvoices xatosi:', error);
     return res.status(500).json({ error: "Fakturalarni olishda xatolik" });

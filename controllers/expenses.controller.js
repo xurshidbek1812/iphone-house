@@ -18,25 +18,97 @@ const canManageExpense = (user) => {
 
 export const getExpenses = async (req, res) => {
   try {
-    const expenses = await prisma.expense.findMany({
-      include: {
-        cashbox: true,
-        expenseCategory: {
-          include: {
-            group: true
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
+    const search = String(req.query.search || '').trim();
+
+    const where = search
+      ? {
+          OR: [
+            {
+              note: {
+                contains: search,
+                mode: 'insensitive'
+              }
+            },
+            {
+              status: {
+                contains: search,
+                mode: 'insensitive'
+              }
+            },
+            {
+              cashbox: {
+                name: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              }
+            },
+            {
+              createdBy: {
+                fullName: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              }
+            },
+            {
+              approvedBy: {
+                fullName: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              }
+            },
+            {
+              expenseCategory: {
+                name: {
+                  contains: search,
+                  mode: 'insensitive'
+                }
+              }
+            },
+            {
+              expenseCategory: {
+                group: {
+                  name: {
+                    contains: search,
+                    mode: 'insensitive'
+                  }
+                }
+              }
+            }
+          ]
+        }
+      : {};
+
+    const [total, expenses] = await Promise.all([
+      prisma.expense.count({ where }),
+      prisma.expense.findMany({
+        where,
+        include: {
+          cashbox: true,
+          createdBy: {
+            select: { id: true, fullName: true, username: true }
+          },
+          approvedBy: {
+            select: { id: true, fullName: true, username: true }
+          },
+          expenseCategory: {
+            include: {
+              group: true
+            }
           }
         },
-        createdBy: {
-          select: { id: true, fullName: true, username: true }
-        },
-        approvedBy: {
-          select: { id: true, fullName: true, username: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      })
+    ]);
 
-    const result = expenses.map((item) => ({
+    const items = expenses.map((item) => ({
       ...item,
       createdByName:
         item.createdBy?.fullName || item.createdBy?.username || '-',
@@ -44,7 +116,13 @@ export const getExpenses = async (req, res) => {
         item.approvedBy?.fullName || item.approvedBy?.username || '-'
     }));
 
-    res.json(result);
+    res.json({
+      items,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error('getExpenses xatosi:', error);
     res.status(500).json({ error: "Xarajatlarni olishda xatolik" });
@@ -61,9 +139,9 @@ export const createExpense = async (req, res) => {
   try {
     const { cashboxId, amount, note, expenseCategoryId } = req.body;
 
-    if (!cashboxId || !amount || !expenseCategoryId) {
+    if (!cashboxId || !amount) {
       return res.status(400).json({
-        error: "Kassa, summa va xarajat moddasi majburiy!"
+        error: "Kassa va summa majburiy!"
       });
     }
 
@@ -73,22 +151,23 @@ export const createExpense = async (req, res) => {
       });
     }
 
+    if (!expenseCategoryId) {
+      return res.status(400).json({
+        error: "Xarajat moddasi majburiy!"
+      });
+    }
+
     const expense = await prisma.expense.create({
       data: {
         cashboxId: Number(cashboxId),
-        amount: Number(amount),
-        note: String(note || '').trim() || null,
         expenseCategoryId: Number(expenseCategoryId),
+        amount: Number(amount),
+        note: String(note).trim(),
         createdById: req.user.id,
         status: 'Jarayonda'
       },
       include: {
         cashbox: true,
-        expenseCategory: {
-          include: {
-            group: true
-          }
-        },
         createdBy: {
           select: {
             id: true,
@@ -101,6 +180,11 @@ export const createExpense = async (req, res) => {
             id: true,
             fullName: true,
             username: true
+          }
+        },
+        expenseCategory: {
+          include: {
+            group: true
           }
         }
       }
@@ -127,14 +211,7 @@ export const approveExpense = async (req, res) => {
 
     const expense = await prisma.expense.findUnique({
       where: { id: expenseId },
-      include: {
-        cashbox: true,
-        expenseCategory: {
-          include: {
-            group: true
-          }
-        }
-      }
+      include: { cashbox: true }
     });
 
     if (!expense) {
@@ -172,9 +249,7 @@ export const approveExpense = async (req, res) => {
           cashboxId: expense.cashboxId,
           amount,
           type: 'EXPENSE',
-          note:
-            expense.note ||
-            `${expense.expenseCategory?.group?.name || ''} / ${expense.expenseCategory?.name || 'Xarajat'}`,
+          note: expense.note || "Tasdiqlangan xarajat",
           userId: req.user.id
         }
       });

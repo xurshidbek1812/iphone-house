@@ -4,19 +4,50 @@ import {
   markAllNotificationsAsRead
 } from '../utils/notifications.js';
 
+const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+
 export const getMyNotifications = async (req, res) => {
   try {
-    const notifications = await prisma.notification.findMany({
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
+
+    const deleteBefore = new Date(Date.now() - TWO_DAYS_MS);
+
+    await prisma.notification.deleteMany({
       where: {
-        userId: req.user.id
-      },
-      orderBy: {
-        createdAt: 'desc'
-      },
-      take: 50
+        userId: req.user.id,
+        createdAt: {
+          lt: deleteBefore
+        }
+      }
     });
 
-    res.json(notifications);
+    const [total, notifications] = await Promise.all([
+      prisma.notification.count({
+        where: {
+          userId: req.user.id
+        }
+      }),
+      prisma.notification.findMany({
+        where: {
+          userId: req.user.id
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        skip,
+        take: limit
+      })
+    ]);
+
+    return res.json({
+      items: notifications,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    });
   } catch (error) {
     console.error('Notificationlarni olishda xatolik:', error);
     res.status(500).json({ error: 'Notificationlarni olishda xatolik yuz berdi' });
