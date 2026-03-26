@@ -38,8 +38,8 @@ const validateDirectSaleItem = async (tx, item) => {
 
   const lineSubtotal = quantity * unitPrice;
 
-  if (isNaN(lineDiscount) || lineDiscount < 0) {
-    throw new Error(`Xato: ${product.name} uchun chegirma noto'g'ri!`);
+  if (isNaN(lineDiscount)) {
+    throw new Error(`Xato: ${product.name} uchun chegirma/ustama noto'g'ri!`);
   }
 
   if (lineDiscount > lineSubtotal) {
