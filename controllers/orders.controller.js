@@ -210,85 +210,93 @@ export const createDirectOrder = async (req, res) => {
       return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
     }
 
-    const order = await prisma.$transaction(async (tx) => {
-      let subtotal = 0;
-      let totalDiscount = 0;
-      const preparedItems = [];
+    const toUpperText = (value) => {
+      if (value === null || value === undefined) return value;
+      return String(value).trim().toUpperCase();
+    };
 
-      for (const item of items) {
-        const preparedItem = await validateDirectSaleItem(tx, item);
+    const txResult = await prisma.$transaction(
+      async (tx) => {
+        let subtotal = 0;
+        let totalDiscount = 0;
+        const preparedItems = [];
 
-        subtotal += preparedItem.quantity * preparedItem.unitPrice;
-        totalDiscount += preparedItem.discountAmount;
+        for (const item of items) {
+          const preparedItem = await validateDirectSaleItem(tx, item);
 
-        preparedItems.push(preparedItem);
-      }
+          subtotal += preparedItem.quantity * preparedItem.unitPrice;
+          totalDiscount += preparedItem.discountAmount;
 
-      const totalAmount = subtotal - totalDiscount;
-
-      if (totalAmount < 0) {
-        throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
-      }
-
-      const orderNumber = await generateOrderNumber(tx);
-
-      const toUpperText = (value) => {
-        if (value === null || value === undefined) return value;
-        return String(value).trim().toUpperCase();
-      };
-
-      const createdOrder = await tx.order.create({
-        data: {
-          orderNumber,
-          orderType: 'DIRECT',
-          status: 'DRAFT',
-          customerId: customerId ? Number(customerId) : null,
-          userId: req.user.id,
-          subtotal,
-          discountAmount: totalDiscount,
-          totalAmount,
-          paidAmount: 0,
-          dueAmount: totalAmount,
-          note: note || null,
-          otherName: customerId ? null : toUpperText(otherName) || null,
-          otherPhone: customerId ? null : otherPhone || null
+          preparedItems.push(preparedItem);
         }
-      });
 
-      for (const preparedItem of preparedItems) {
-        await tx.orderItem.create({
+        const totalAmount = subtotal - totalDiscount;
+
+        if (totalAmount < 0) {
+          throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
+        }
+
+        const orderNumber = await generateOrderNumber(tx);
+
+        const createdOrder = await tx.order.create({
           data: {
-            orderId: createdOrder.id,
-            productId: preparedItem.productId,
-            quantity: preparedItem.quantity,
-            unitPrice: preparedItem.unitPrice,
-            discountAmount: preparedItem.discountAmount,
-            totalAmount: preparedItem.totalAmount
+            orderNumber,
+            orderType: 'DIRECT',
+            status: 'DRAFT',
+            customerId: customerId ? Number(customerId) : null,
+            userId: req.user.id,
+            subtotal,
+            discountAmount: totalDiscount,
+            totalAmount,
+            paidAmount: 0,
+            dueAmount: totalAmount,
+            note: note || null,
+            otherName: customerId ? null : toUpperText(otherName) || null,
+            otherPhone: customerId ? null : otherPhone || null
           }
         });
-      }
 
-      return await tx.order.findUnique({
-        where: { id: createdOrder.id },
-        include: {
-          customer: true,
-          user: {
-            select: {
-              id: true,
-              fullName: true,
-              username: true,
-              role: true,
-              phone: true
+        for (const preparedItem of preparedItems) {
+          await tx.orderItem.create({
+            data: {
+              orderId: createdOrder.id,
+              productId: preparedItem.productId,
+              quantity: preparedItem.quantity,
+              unitPrice: preparedItem.unitPrice,
+              discountAmount: preparedItem.discountAmount,
+              totalAmount: preparedItem.totalAmount
             }
-          },
-          items: {
-            include: {
-              product: true
-            }
-          },
-          payments: true
+          });
         }
-      });
+
+        return { orderId: createdOrder.id };
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000
+      }
+    );
+
+    const order = await prisma.order.findUnique({
+      where: { id: txResult.orderId },
+      include: {
+        customer: true,
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            username: true,
+            role: true,
+            phone: true
+          }
+        },
+        items: {
+          include: {
+            product: true
+          }
+        },
+        payments: true
+      }
     });
 
     res.json({
@@ -438,83 +446,91 @@ export const updateOrderDraft = async (req, res) => {
       });
     }
 
-    const updatedOrder = await prisma.$transaction(async (tx) => {
-      let subtotal = 0;
-      let totalDiscount = 0;
-      const preparedItems = [];
+    const toUpperText = (value) => {
+      if (value === null || value === undefined) return value;
+      return String(value).trim().toUpperCase();
+    };
 
-      for (const item of items) {
-        const preparedItem = await validateDirectSaleItem(tx, item);
+    const txResult = await prisma.$transaction(
+      async (tx) => {
+        let subtotal = 0;
+        let totalDiscount = 0;
+        const preparedItems = [];
 
-        subtotal += preparedItem.quantity * preparedItem.unitPrice;
-        totalDiscount += preparedItem.discountAmount;
+        for (const item of items) {
+          const preparedItem = await validateDirectSaleItem(tx, item);
 
-        preparedItems.push(preparedItem);
-      }
+          subtotal += preparedItem.quantity * preparedItem.unitPrice;
+          totalDiscount += preparedItem.discountAmount;
 
-      const totalAmount = subtotal - totalDiscount;
-
-      if (totalAmount < 0) {
-        throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
-      }
-
-      const toUpperText = (value) => {
-        if (value === null || value === undefined) return value;
-        return String(value).trim().toUpperCase();
-      };
-
-      await tx.order.update({
-        where: { id: orderId },
-        data: {
-          customerId: customerId ? Number(customerId) : null,
-          subtotal,
-          discountAmount: totalDiscount,
-          totalAmount,
-          dueAmount: totalAmount - Number(existingOrder.paidAmount || 0),
-          note: note || null,
-          otherName: customerId ? null : toUpperText(otherName) || null,
-          otherPhone: customerId ? null : otherPhone || null
+          preparedItems.push(preparedItem);
         }
-      });
 
-      await tx.orderItem.deleteMany({
-        where: { orderId }
-      });
+        const totalAmount = subtotal - totalDiscount;
 
-      for (const preparedItem of preparedItems) {
-        await tx.orderItem.create({
+        if (totalAmount < 0) {
+          throw new Error("Xato: Yakuniy summa manfiy bo'lishi mumkin emas!");
+        }
+
+        await tx.order.update({
+          where: { id: orderId },
           data: {
-            orderId,
-            productId: preparedItem.productId,
-            quantity: preparedItem.quantity,
-            unitPrice: preparedItem.unitPrice,
-            discountAmount: preparedItem.discountAmount,
-            totalAmount: preparedItem.totalAmount
+            customerId: customerId ? Number(customerId) : null,
+            subtotal,
+            discountAmount: totalDiscount,
+            totalAmount,
+            dueAmount: totalAmount - Number(existingOrder.paidAmount || 0),
+            note: note || null,
+            otherName: customerId ? null : toUpperText(otherName) || null,
+            otherPhone: customerId ? null : otherPhone || null
           }
         });
-      }
 
-      return await tx.order.findUnique({
-        where: { id: orderId },
-        include: {
-          customer: true,
-          user: {
-            select: {
-              id: true,
-              fullName: true,
-              username: true,
-              role: true,
-              phone: true
+        await tx.orderItem.deleteMany({
+          where: { orderId }
+        });
+
+        for (const preparedItem of preparedItems) {
+          await tx.orderItem.create({
+            data: {
+              orderId,
+              productId: preparedItem.productId,
+              quantity: preparedItem.quantity,
+              unitPrice: preparedItem.unitPrice,
+              discountAmount: preparedItem.discountAmount,
+              totalAmount: preparedItem.totalAmount
             }
-          },
-          items: {
-            include: {
-              product: true
-            }
-          },
-          payments: true
+          });
         }
-      });
+
+        return { orderId };
+      },
+      {
+        maxWait: 10000,
+        timeout: 20000
+      }
+    );
+
+    const updatedOrder = await prisma.order.findUnique({
+      where: { id: txResult.orderId },
+      include: {
+        customer: true,
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            username: true,
+            role: true,
+            phone: true
+          }
+        },
+        items: {
+          include: {
+            product: true
+          }
+        },
+        payments: true
+      }
     });
 
     res.json({
