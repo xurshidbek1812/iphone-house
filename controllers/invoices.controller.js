@@ -268,7 +268,50 @@ export const updateInvoice = async (req, res) => {
       });
     }
 
+    const normalizedItems = (Array.isArray(items) ? items : []).map((item) => ({
+      supplierInvoiceId: invoiceId,
+      productId: Number(item.productId),
+      customId: Number(item.customId || 0),
+      name: String(item.name || '').trim(),
+      count: Number(item.count || 0),
+      price: Number(item.price || 0),
+      salePrice: Number(item.salePrice || 0),
+      currency: item.currency || 'UZS',
+      markup: Number(item.markup || 0),
+      total:
+        Number(item.total || 0) ||
+        Number(item.count || 0) * Number(item.price || 0)
+    }));
+
+    const invalidItem = normalizedItems.find(
+      (item) =>
+        !item.productId ||
+        Number.isNaN(item.productId) ||
+        item.count <= 0 ||
+        item.price < 0 ||
+        !item.name
+    );
+
+    if (invalidItem) {
+      return res.status(400).json({
+        error: `Mahsulot ma'lumoti noto'g'ri: ${invalidItem.name || "Noma'lum mahsulot"}`
+      });
+    }
+
     await prisma.$transaction(async (tx) => {
+      for (const item of normalizedItems) {
+        const productExists = await tx.product.findUnique({
+          where: { id: item.productId },
+          select: { id: true }
+        });
+
+        if (!productExists) {
+          throw new Error(
+            `${item.name || "Noma'lum mahsulot"} uchun productId noto'g'ri: ${item.productId}`
+          );
+        }
+      }
+
       await tx.supplierInvoice.update({
         where: { id: invoiceId },
         data: {
@@ -286,24 +329,18 @@ export const updateInvoice = async (req, res) => {
       });
 
       await tx.supplierInvoiceItem.createMany({
-        data: items.map((item) => ({
-          supplierInvoiceId: invoiceId,
-          productId: Number(item.id || item.productId),
-          customId: Number(item.customId || 0),
-          name: String(item.name || '').trim(),
-          count: Number(item.count || 0),
-          price: Number(item.price || 0),
-          salePrice: Number(item.salePrice || 0),
-          currency: item.currency || 'UZS',
-          markup: Number(item.markup || 0),
-          total: Number(item.total || 0)
-        }))
+        data: normalizedItems
       });
     });
 
     return res.json({ success: true });
   } catch (error) {
     console.error('updateInvoice xatosi:', error);
+
+    if (error.message) {
+      return res.status(400).json({ error: error.message });
+    }
+
     return res.status(500).json({ error: "Tahrirlashda xatolik yuz berdi" });
   }
 };
