@@ -8,137 +8,122 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  fullName  String
-  username  String   @unique
-  password  String
-  phone     String?
-  role      String   @default("ADMIN")
-  createdAt DateTime @default(now())
-
-  orders           Order[]
-  contracts        Contract[]
-  contractComments ContractComment[]
-  payments         Payment[]
-  cashTransactions CashTransaction[]
-  transactions     Transaction[]
-  stockMovements   StockMovement[]
-  partnerLedgers   PartnerLedger[]
-  inventoryActs    InventoryAct[]
-  Return           Return[]
-  notifications Notification[]
-  permissions String[] @default([])
+  id                  Int                  @id @default(autoincrement())
+  fullName            String
+  username            String               @unique
+  password            String
+  role                String               @default("ADMIN")
+  createdAt           DateTime             @default(now())
+  phone               String?
+  permissions         String[]             @default([])
+  cashTransactions    CashTransaction[]
   cashboxTransactions CashboxTransaction[]
-  createdExpenses  Expense[] @relation("ExpenseCreatedBy")
-  approvedExpenses Expense[] @relation("ExpenseApprovedBy")
+  contracts           Contract[]
+  contractComments    ContractComment[]
+  approvedExpenses    Expense[]            @relation("ExpenseApprovedBy")
+  createdExpenses     Expense[]            @relation("ExpenseCreatedBy")
+  inventoryActs       InventoryAct[]
+  notifications       Notification[]
+  orders              Order[]
+  partnerLedgers      PartnerLedger[]
+  payments            Payment[]
+  Return              Return[]
+  stockMovements      StockMovement[]
+  transactions        Transaction[]
 }
 
 model Customer {
-  id         Int      @id @default(autoincrement())
-  firstName  String
-  lastName   String
-  middleName String?
-  gender     String
-  dob        DateTime
-  pinfl      String   @unique
-  note       String?
-
-  document CustomerDocument?
-  address  CustomerAddress?
-  phones   CustomerPhone[]
-  job      CustomerJob?
-
-  createdAt DateTime @default(now())
-
-  orders          Order[]
-  contracts       Contract[]
-  coBorrowerLinks ContractCoBorrower[]
-  returns         Return[]
-
-  isBlacklisted     Boolean            @default(false)
-  bonusBalance      Decimal            @default(0)
+  id                Int                  @id @default(autoincrement())
+  pinfl             String               @unique
+  isBlacklisted     Boolean              @default(false)
+  bonusBalance      Decimal              @default(0)
+  createdAt         DateTime             @default(now())
+  dob               DateTime
+  firstName         String
+  gender            String
+  lastName          String
+  middleName        String?
+  note              String?
   blacklistRequests BlacklistRequest[]
+  contracts         Contract[]
+  coBorrowerLinks   ContractCoBorrower[]
+  address           CustomerAddress?
+  document          CustomerDocument?
+  job               CustomerJob?
+  phones            CustomerPhone[]
+  orders            Order[]
+  returns           Return[]
 }
 
 model BlacklistRequest {
-  id Int @id @default(autoincrement())
-
-  customerId Int
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  type   String
-  reason String
-
+  id            Int      @id @default(autoincrement())
+  customerId    Int
+  type          String
+  reason        String
   requesterName String
   approverName  String?
-
-  status    String   @default("Jarayonda")
-  createdAt DateTime @default(now())
+  status        String   @default("Jarayonda")
+  createdAt     DateTime @default(now())
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model CustomerDocument {
   id         Int      @id @default(autoincrement())
   customerId Int      @unique
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
   type       String
   series     String
   number     String
   givenDate  DateTime
   expiryDate DateTime
   givenBy    String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model CustomerAddress {
   id         Int      @id @default(autoincrement())
   customerId Int      @unique
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
   regionId   Int
   districtId Int
-
-  region   Region   @relation(fields: [regionId], references: [id])
-  district District @relation(fields: [districtId], references: [id])
-
-  mfy      String?
-  street   String?
-  landmark String?
+  street     String?
+  landmark   String?
+  mfy        String?
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  district   District @relation(fields: [districtId], references: [id])
+  region     Region   @relation(fields: [regionId], references: [id])
 }
 
 model CustomerPhone {
   id         Int      @id @default(autoincrement())
   customerId Int
+  name       String
+  phone      String
+  isMain     Boolean  @default(false)
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
-  name   String
-  phone  String
-  isMain Boolean @default(false)
 }
 
 model CustomerJob {
-  id         Int      @id @default(autoincrement())
-  customerId Int      @unique
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-
+  id          Int      @id @default(autoincrement())
+  customerId  Int      @unique
   type        String
   companyName String?
   position    String?
   source      String?
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model Region {
   id        Int               @id @default(autoincrement())
   name      String
-  districts District[]
   addresses CustomerAddress[]
+  districts District[]
 }
 
 model District {
   id        Int               @id @default(autoincrement())
   name      String
   regionId  Int
-  region    Region            @relation(fields: [regionId], references: [id])
   addresses CustomerAddress[]
+  region    Region            @relation(fields: [regionId], references: [id])
 }
 
 model Category {
@@ -148,65 +133,52 @@ model Category {
 }
 
 model Product {
-  id             Int     @id @default(autoincrement())
-  customId       Int     @unique
-  name           String
-  normalizedName String? @unique
-  category       String  @default("-")
-  unit           String  @default("Dona")
-
-  buyPrice  Float @default(0)
-  salePrice Float @default(0)
-
-  quantity     Float  @default(0)
-  buyCurrency  String @default("USD")
-  saleCurrency String @default("UZS")
-
-  createdAt DateTime @default(now())
-
-  batches             ProductBatch[]
-  stockMovements      StockMovement[]
-  orderItems          OrderItem[]
+  id                  Int                   @id @default(autoincrement())
+  name                String
+  createdAt           DateTime              @default(now())
+  buyPrice            Float                 @default(0)
+  customId            Int                   @unique
+  quantity            Float                 @default(0)
+  salePrice           Float                 @default(0)
+  unit                String                @default("Dona")
+  category            String                @default("-")
+  buyCurrency         String                @default("USD")
+  normalizedName      String?               @unique
+  saleCurrency        String                @default("UZS")
   contractItems       ContractItem[]
   inventoryItems      InventoryItem[]
+  orderItems          OrderItem[]
+  batches             ProductBatch[]
   returnItems         ReturnItem[]
+  stockMovements      StockMovement[]
   SupplierInvoiceItem SupplierInvoiceItem[]
 }
 
 model ProductBatch {
-  id Int @id @default(autoincrement())
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  supplierId Int?
-  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-
-  supplierInvoiceId Int?
-  supplierInvoice   SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id], onDelete: SetNull)
-
+  id                    Int                           @id @default(autoincrement())
+  productId             Int
+  supplierId            Int?
+  supplierInvoiceId     Int?
   supplierInvoiceItemId Int?
-  supplierInvoiceItem   SupplierInvoiceItem? @relation(fields: [supplierInvoiceItemId], references: [id], onDelete: SetNull)
-
-  initialQty  Float
-  quantity    Float
-  reservedQty Float @default(0)
-
-  buyPrice    Float
-  salePrice   Float?
-  buyCurrency String @default("USD")
-
-  supplierName  String?
-  invoiceNumber String?
-
-  createdAt  DateTime @default(now())
-  isArchived Boolean  @default(false)
-  note       String?
-
-  allocations         OrderItemBatchAllocation[]
-  contractAllocations ContractItemBatchAllocation[]
-  stockMovements      StockMovement[]
-  returnItems         ReturnItem[]
+  initialQty            Float
+  quantity              Float
+  reservedQty           Float                         @default(0)
+  buyPrice              Float
+  salePrice             Float?
+  buyCurrency           String                        @default("USD")
+  supplierName          String?
+  invoiceNumber         String?
+  createdAt             DateTime                      @default(now())
+  isArchived            Boolean                       @default(false)
+  note                  String?
+  contractAllocations   ContractItemBatchAllocation[]
+  allocations           OrderItemBatchAllocation[]
+  product               Product                       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier              Supplier?                     @relation(fields: [supplierId], references: [id])
+  supplierInvoice       SupplierInvoice?              @relation(fields: [supplierInvoiceId], references: [id])
+  supplierInvoiceItem   SupplierInvoiceItem?          @relation(fields: [supplierInvoiceItemId], references: [id])
+  returnItems           ReturnItem[]
+  stockMovements        StockMovement[]
 
   @@index([productId])
   @@index([supplierId])
@@ -214,32 +186,21 @@ model ProductBatch {
 }
 
 model StockMovement {
-  id Int @id @default(autoincrement())
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  batchId Int?
-  batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
-
-  type String
-  // IN, OUT, RETURN, ADJUSTMENT, RESERVE, RELEASE
-
-  quantity Float
-
-  unitCost  Decimal?
-  unitPrice Decimal?
-
+  id         Int           @id @default(autoincrement())
+  productId  Int
+  batchId    Int?
+  type       String
+  quantity   Float
+  unitCost   Decimal?
+  unitPrice  Decimal?
   sourceType String
-  // SUPPLIER_INVOICE, ORDER, CONTRACT, RETURN, INVENTORY_ACT, MIGRATION
-
-  sourceId Int?
-
-  note      String?
-  createdAt DateTime @default(now())
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sourceId   Int?
+  note       String?
+  createdAt  DateTime      @default(now())
+  userId     Int?
+  batch      ProductBatch? @relation(fields: [batchId], references: [id])
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user       User?         @relation(fields: [userId], references: [id])
 
   @@index([productId])
   @@index([batchId])
@@ -248,107 +209,86 @@ model StockMovement {
 }
 
 model Supplier {
-  id        Int      @id @default(autoincrement())
-  customId  String?
+  id        Int               @id @default(autoincrement())
   name      String
   phone     String?
   address   String?
+  createdAt DateTime          @default(now())
+  customId  String?
   note      String?
-  createdAt DateTime @default(now())
-
-  invoices SupplierInvoice[]
-  batches  ProductBatch[]
+  batches   ProductBatch[]
+  invoices  SupplierInvoice[]
 }
 
 model SupplierInvoice {
-  id Int @id @default(autoincrement())
-
-  supplierId   Int?
-  supplierName String?
-  supplier     Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-
+  id            Int                   @id @default(autoincrement())
+  supplierId    Int?
+  supplierName  String?
   invoiceNumber String
-  date          DateTime @default(now())
-
-  totalSum     Decimal @default(0)
-  exchangeRate Decimal @default(12500)
-  currency     String  @default("USD")
-
-  status   String  @default("Jarayonda")
-  userName String?
-  note     String?
-
-  createdAt DateTime @default(now())
-
-  items   SupplierInvoiceItem[]
-  batches ProductBatch[]
+  date          DateTime              @default(now())
+  totalSum      Decimal               @default(0)
+  exchangeRate  Decimal               @default(12500)
+  currency      String                @default("USD")
+  status        String                @default("Jarayonda")
+  userName      String?
+  note          String?
+  createdAt     DateTime              @default(now())
+  batches       ProductBatch[]
+  supplier      Supplier?             @relation(fields: [supplierId], references: [id])
+  items         SupplierInvoiceItem[]
 
   @@index([supplierId])
   @@index([invoiceNumber])
 }
 
 model SupplierInvoiceItem {
-  id Int @id @default(autoincrement())
-
+  id                Int             @id @default(autoincrement())
   supplierInvoiceId Int
+  productId         Int
+  customId          Int?
+  name              String
+  count             Float
+  price             Decimal
+  salePrice         Decimal
+  currency          String          @default("UZS")
+  markup            Float?
+  total             Decimal
+  batches           ProductBatch[]
+  product           Product         @relation(fields: [productId], references: [id])
   invoice           SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
-  customId  Int?
-  name      String
-  count     Float
-  price     Decimal
-  salePrice Decimal
-  currency  String  @default("UZS")
-  markup    Float?
-  total     Decimal
-
-  batches ProductBatch[]
 
   @@index([supplierInvoiceId])
   @@index([productId])
 }
 
 model Partner {
-  id              Int      @id @default(autoincrement())
+  id              Int             @id @default(autoincrement())
   name            String
   phone           String?
   address         String?
   note            String?
-  balanceSnapshot Decimal  @default(0)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  orders        Order[]
-  payments      Payment[]
-  ledgerEntries PartnerLedger[]
-  Return        Return[]
+  balanceSnapshot Decimal         @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  orders          Order[]
+  ledgerEntries   PartnerLedger[]
+  payments        Payment[]
+  Return          Return[]
 }
 
 model PartnerLedger {
-  id Int @id @default(autoincrement())
-
-  partnerId Int
-  partner   Partner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
-
-  type String
-  // DEBIT, CREDIT
-
-  amount   Decimal
-  currency String  @default("UZS")
-
+  id         Int      @id @default(autoincrement())
+  partnerId  Int
+  type       String
+  amount     Decimal
+  currency   String   @default("UZS")
   sourceType String
-  // ORDER, PAYMENT, RETURN, ADJUSTMENT, MIGRATION
-
-  sourceId Int?
-
-  note      String?
-  createdAt DateTime @default(now())
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sourceId   Int?
+  note       String?
+  createdAt  DateTime @default(now())
+  userId     Int?
+  partner    Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id])
 
   @@index([partnerId])
   @@index([sourceType, sourceId])
@@ -356,40 +296,29 @@ model PartnerLedger {
 }
 
 model Order {
-  id          Int    @id @default(autoincrement())
-  orderNumber String @unique
-
-  orderType String
-  // DIRECT, PARTNER
-
-  status String @default("COMPLETED")
-  // DRAFT, COMPLETED, CANCELLED, RETURNED
-
-  customerId Int?
-  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-
-  partnerId Int?
-  partner   Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-
-  userId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Restrict)
-
+  id             Int         @id @default(autoincrement())
+  orderNumber    String      @unique
+  orderType      String
+  status         String      @default("COMPLETED")
+  customerId     Int?
+  partnerId      Int?
+  userId         Int
   subtotal       Decimal
-  discountAmount Decimal @default(0)
+  discountAmount Decimal     @default(0)
   totalAmount    Decimal
-
-  paidAmount Decimal @default(0)
-  dueAmount  Decimal @default(0)
-
-  note       String?
-  otherName  String?
-  otherPhone String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  items    OrderItem[]
-  payments Payment[]
-  returns  Return[]
+  paidAmount     Decimal     @default(0)
+  dueAmount      Decimal     @default(0)
+  note           String?
+  otherName      String?
+  otherPhone     String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  customer       Customer?   @relation(fields: [customerId], references: [id])
+  partner        Partner?    @relation(fields: [partnerId], references: [id])
+  user           User        @relation(fields: [userId], references: [id])
+  items          OrderItem[]
+  payments       Payment[]
+  returns        Return[]
 
   @@index([customerId])
   @@index([partnerId])
@@ -398,81 +327,62 @@ model Order {
 }
 
 model OrderItem {
-  id Int @id @default(autoincrement())
-
-  orderId Int
-  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
+  id             Int                        @id @default(autoincrement())
+  orderId        Int
+  productId      Int
   quantity       Float
   unitPrice      Decimal
-  discountAmount Decimal @default(0)
+  discountAmount Decimal                    @default(0)
   totalAmount    Decimal
-
-  allocations OrderItemBatchAllocation[]
+  order          Order                      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product                    @relation(fields: [productId], references: [id])
+  allocations    OrderItemBatchAllocation[]
 
   @@index([orderId])
   @@index([productId])
 }
 
 model OrderItemBatchAllocation {
-  id Int @id @default(autoincrement())
-
+  id          Int          @id @default(autoincrement())
   orderItemId Int
-  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
-
-  batchId Int
-  batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
-
-  quantity  Float
-  unitCost  Decimal?
-  unitPrice Decimal?
+  batchId     Int
+  quantity    Float
+  unitCost    Decimal?
+  unitPrice   Decimal?
+  batch       ProductBatch @relation(fields: [batchId], references: [id])
+  orderItem   OrderItem    @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
 
   @@index([orderItemId])
   @@index([batchId])
 }
 
 model Contract {
-  id Int @id @default(autoincrement())
-
-  contractNumber String @unique
-
-  status String @default("DRAFT")
-  // DRAFT, COMPLETED, CANCELLED
-
-  customerId Int
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-
-  cashboxId Int
-  cashbox   Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
-
-  userId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Restrict)
-
+  id             Int                  @id @default(autoincrement())
+  contractNumber String               @unique
+  customerId     Int
+  userId         Int
   totalAmount    Decimal
-  prepayment     Decimal @default(0)
-  debtAmount     Decimal @default(0)
-  monthlyPayment Decimal @default(0)
-  discountAmount Decimal @default(0)
-
-  durationMonths Int @default(0)
-  paymentDay     Int @default(1)
-
-  note String?
-
-  confirmedAt DateTime?
-  cancelledAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  items       ContractItem[]
-  coBorrowers ContractCoBorrower[]
-  schedules   ContractSchedule[]
-  comments    ContractComment[]
-  payments    Payment[]
+  debtAmount     Decimal              @default(0)
+  durationMonths Int                  @default(0)
+  status         String               @default("DRAFT")
+  cancelledAt    DateTime?
+  cashboxId      Int
+  confirmedAt    DateTime?
+  createdAt      DateTime             @default(now())
+  discountAmount Decimal              @default(0)
+  monthlyPayment Decimal              @default(0)
+  note           String?
+  paymentDay     Int                  @default(1)
+  prepayment     Decimal              @default(0)
+  updatedAt      DateTime             @updatedAt
+  cashbox        Cashbox              @relation(fields: [cashboxId], references: [id])
+  customer       Customer             @relation(fields: [customerId], references: [id])
+  user           User                 @relation(fields: [userId], references: [id])
+  coBorrowers    ContractCoBorrower[]
+  comments       ContractComment[]
+  items          ContractItem[]
+  schedules      ContractSchedule[]
+  payments       Payment[]
 
   @@index([customerId])
   @@index([cashboxId])
@@ -482,18 +392,14 @@ model Contract {
 }
 
 model ContractItem {
-  id Int @id @default(autoincrement())
-
-  contractId Int
-  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
+  id          Int                           @id @default(autoincrement())
+  contractId  Int
+  productId   Int
   quantity    Float
-  unitPrice   Decimal
   totalAmount Decimal
-
+  unitPrice   Decimal
+  contract    Contract                      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  product     Product                       @relation(fields: [productId], references: [id])
   allocations ContractItemBatchAllocation[]
 
   @@index([contractId])
@@ -501,32 +407,26 @@ model ContractItem {
 }
 
 model ContractItemBatchAllocation {
-  id Int @id @default(autoincrement())
-
+  id             Int          @id @default(autoincrement())
   contractItemId Int
+  batchId        Int
+  quantity       Float
+  unitCost       Decimal?
+  unitPrice      Decimal?
+  batch          ProductBatch @relation(fields: [batchId], references: [id])
   contractItem   ContractItem @relation(fields: [contractItemId], references: [id], onDelete: Cascade)
-
-  batchId Int
-  batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
-
-  quantity  Float
-  unitCost  Decimal?
-  unitPrice Decimal?
 
   @@index([contractItemId])
   @@index([batchId])
 }
 
 model ContractCoBorrower {
-  id Int @id @default(autoincrement())
-
+  id         Int      @id @default(autoincrement())
   contractId Int
-  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
   customerId Int
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  customer   Customer @relation(fields: [customerId], references: [id])
 
   @@unique([contractId, customerId])
   @@index([contractId])
@@ -534,20 +434,15 @@ model ContractCoBorrower {
 }
 
 model ContractSchedule {
-  id Int @id @default(autoincrement())
-
-  contractId Int
-  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
+  id          Int      @id @default(autoincrement())
+  contractId  Int
   monthNumber Int
   date        DateTime
   amount      Decimal
   paid        Decimal  @default(0)
-
-  status String @default("KUTILMOQDA")
-  // KUTILMOQDA, TOLANDI, QISMAN_TOLANDI, KECIKDI
-
-  createdAt DateTime @default(now())
+  status      String   @default("KUTILMOQDA")
+  createdAt   DateTime @default(now())
+  contract    Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
 
   @@unique([contractId, monthNumber])
   @@index([contractId])
@@ -555,18 +450,14 @@ model ContractSchedule {
 }
 
 model ContractComment {
-  id Int @id @default(autoincrement())
-
+  id         Int      @id @default(autoincrement())
   contractId Int
-  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
+  userId     Int?
   authorName String?
   text       String
-
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id])
 
   @@index([contractId])
   @@index([userId])
@@ -574,77 +465,59 @@ model ContractComment {
 }
 
 model Cashbox {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  balance   Decimal    @default(0)
-  currency  String   @default("UZS")
-  responsibleName String?
-  isActive        Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  contracts          Contract[]
-  payments           Payment[]
+  id                 Int                  @id @default(autoincrement())
+  name               String               @unique
+  balance            Decimal              @default(0)
+  currency           String               @default("UZS")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  isActive           Boolean              @default(true)
+  responsibleName    String?
   cashTransactions   CashTransaction[]
-  legacyTransactions Transaction[]     @relation("LegacyCashboxTransactions")
   transactions       CashboxTransaction[]
-  expenses Expense[]
+  contracts          Contract[]
+  expenses           Expense[]
+  payments           Payment[]
+  legacyTransactions Transaction[]        @relation("LegacyCashboxTransactions")
 }
 
 model CashboxTransaction {
-  id        Int      @id @default(autoincrement())
-  cashboxId Int
-  cashbox   Cashbox  @relation(fields: [cashboxId], references: [id], onDelete: Cascade)
-
-  type      String   // DEPOSIT | WITHDRAW
-  amount    Decimal
-  note      String?
-  createdAt DateTime @default(now())
-
-  userId    Int?
-  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  id              Int      @id @default(autoincrement())
+  cashboxId       Int
+  type            String
+  amount          Decimal
+  note            String?
+  createdAt       DateTime @default(now())
+  userId          Int?
   transferGroupId String?
+  cashbox         Cashbox  @relation(fields: [cashboxId], references: [id], onDelete: Cascade)
+  user            User?    @relation(fields: [userId], references: [id])
 
   @@index([cashboxId])
   @@index([createdAt])
 }
 
 model Payment {
-  id Int @id @default(autoincrement())
-
-  orderId Int?
-  order   Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
-
-  partnerId Int?
-  partner   Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-
-  contractId Int?
-  contract   Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
-
-  amount   Decimal
-  currency String  @default("UZS")
-
-  method String
-  // CASH, CARD, BANK_TRANSFER, CONTRACT
-
-  payerType String
-  // CUSTOMER, PARTNER, CONTRACT_ORG
-
-  direction String @default("IN")
-  // IN, OUT
-
-  status String   @default("POSTED")
-  paidAt DateTime @default(now())
-
-  cashboxId Int?
-  cashbox   Cashbox? @relation(fields: [cashboxId], references: [id], onDelete: SetNull)
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  note String?
-
+  id              Int              @id @default(autoincrement())
+  contractId      Int?
+  amount          Decimal
+  cashboxId       Int?
+  currency        String           @default("UZS")
+  direction       String           @default("IN")
+  method          String
+  note            String?
+  orderId         Int?
+  paidAt          DateTime         @default(now())
+  partnerId       Int?
+  payerType       String
+  status          String           @default("POSTED")
+  userId          Int?
   cashTransaction CashTransaction?
+  cashbox         Cashbox?         @relation(fields: [cashboxId], references: [id])
+  contract        Contract?        @relation(fields: [contractId], references: [id])
+  order           Order?           @relation(fields: [orderId], references: [id])
+  partner         Partner?         @relation(fields: [partnerId], references: [id])
+  user            User?            @relation(fields: [userId], references: [id])
 
   @@index([orderId])
   @@index([partnerId])
@@ -655,51 +528,39 @@ model Payment {
 
 model Transaction {
   id            Int      @id @default(autoincrement())
-  type          String
+  createdAt     DateTime @default(now())
   amount        Decimal
   currency      String   @default("UZS")
-  paymentMethod String   @default("NAQD")
+  type          String
   category      String?
-  reason        String?
   description   String?
+  userId        Int
+  cashboxId     Int?
+  paymentMethod String   @default("NAQD")
+  reason        String?
   referenceId   Int?
-  createdAt     DateTime @default(now())
-
-  cashboxId Int?
-  cashbox   Cashbox? @relation("LegacyCashboxTransactions", fields: [cashboxId], references: [id])
-
-  userId Int
-  user   User @relation(fields: [userId], references: [id])
+  cashbox       Cashbox? @relation("LegacyCashboxTransactions", fields: [cashboxId], references: [id])
+  user          User     @relation(fields: [userId], references: [id])
 
   @@index([cashboxId])
   @@index([userId])
 }
 
 model CashTransaction {
-  id Int @id @default(autoincrement())
-
-  cashboxId Int
-  cashbox   Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
-
-  paymentId Int?     @unique
-  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
-
-  type String
-  // INCOME, EXPENSE
-
+  id         Int      @id @default(autoincrement())
+  cashboxId  Int
+  paymentId  Int?     @unique
+  type       String
   sourceType String
-  // ORDER_PAYMENT, CONTRACT_PAYMENT, PARTNER_PAYMENT, REFUND, MANUAL_EXPENSE, MIGRATION
-
-  sourceId Int?
-
-  amount   Decimal
-  currency String  @default("UZS")
-
-  note      String?
-  createdAt DateTime @default(now())
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  sourceId   Int?
+  amount     Decimal
+  currency   String   @default("UZS")
+  note       String?
+  createdAt  DateTime @default(now())
+  userId     Int?
+  cashbox    Cashbox  @relation(fields: [cashboxId], references: [id])
+  payment    Payment? @relation(fields: [paymentId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id])
 
   @@index([cashboxId])
   @@index([sourceType, sourceId])
@@ -707,30 +568,21 @@ model CashTransaction {
 }
 
 model Return {
-  id Int @id @default(autoincrement())
-
-  orderId Int?
-  order   Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
-
-  customerId Int?
-  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-
-  partnerId Int?
-  partner   Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  status String @default("DRAFT")
-  // DRAFT, POSTED, CANCELLED
-
-  totalAmount  Decimal @default(0)
-  refundAmount Decimal @default(0)
-
-  reason    String?
-  createdAt DateTime @default(now())
-
-  items ReturnItem[]
+  id           Int          @id @default(autoincrement())
+  orderId      Int?
+  customerId   Int?
+  partnerId    Int?
+  userId       Int?
+  status       String       @default("DRAFT")
+  totalAmount  Decimal      @default(0)
+  refundAmount Decimal      @default(0)
+  reason       String?
+  createdAt    DateTime     @default(now())
+  customer     Customer?    @relation(fields: [customerId], references: [id])
+  order        Order?       @relation(fields: [orderId], references: [id])
+  partner      Partner?     @relation(fields: [partnerId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+  items        ReturnItem[]
 
   @@index([orderId])
   @@index([customerId])
@@ -738,20 +590,16 @@ model Return {
 }
 
 model ReturnItem {
-  id Int @id @default(autoincrement())
-
-  returnId Int
-  return   Return @relation(fields: [returnId], references: [id], onDelete: Cascade)
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
-  batchId Int?
-  batch   ProductBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
-
+  id          Int           @id @default(autoincrement())
+  returnId    Int
+  productId   Int
+  batchId     Int?
   quantity    Float
   unitPrice   Decimal?
   totalAmount Decimal?
+  batch       ProductBatch? @relation(fields: [batchId], references: [id])
+  product     Product       @relation(fields: [productId], references: [id])
+  return      Return        @relation(fields: [returnId], references: [id], onDelete: Cascade)
 
   @@index([returnId])
   @@index([productId])
@@ -759,63 +607,46 @@ model ReturnItem {
 }
 
 model InventoryAct {
-  id             Int      @id @default(autoincrement())
-  date           DateTime @default(now())
-  totalDiff      Float    @default(0)
-  isStockUpdated Boolean  @default(false)
-
-  userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  items InventoryItem[]
+  id             Int             @id @default(autoincrement())
+  date           DateTime        @default(now())
+  totalDiff      Float           @default(0)
+  isStockUpdated Boolean         @default(false)
+  userId         Int?
+  user           User?           @relation(fields: [userId], references: [id])
+  items          InventoryItem[]
 
   @@index([date])
 }
 
 model InventoryItem {
-  id Int @id @default(autoincrement())
-
+  id             Int          @id @default(autoincrement())
   inventoryActId Int
+  productId      Int
+  systemQty      Float
+  countedQty     Float
+  diff           Float
   inventoryAct   InventoryAct @relation(fields: [inventoryActId], references: [id], onDelete: Cascade)
-
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
-  systemQty  Float
-  countedQty Float
-  diff       Float
+  product        Product      @relation(fields: [productId], references: [id])
 
   @@index([inventoryActId])
   @@index([productId])
 }
 
 model Notification {
-  id Int @id @default(autoincrement())
-
-  userId Int
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  type String
-  // BLACKLIST, CONTRACT, ORDER, INVOICE
-
-  title String
-  message String?
-
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  type       String
+  title      String
+  message    String?
   entityType String?
-  // BLACKLIST_REQUEST, CONTRACT, ORDER, SUPPLIER_INVOICE
-
-  entityId Int?
-
-  status String?
-  // Yuborildi, To'lov kutilmoqda, Jarayonda ...
-
-  amount Decimal? @default(0)
-
-  isRead Boolean @default(false)
-  readAt DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  entityId   Int?
+  status     String?
+  amount     Decimal?  @default(0)
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
   @@index([entityType, entityId])
@@ -823,23 +654,21 @@ model Notification {
 }
 
 model Expense {
-  id           Int      @id @default(autoincrement())
-  amount       Decimal  @default(0)
-  note         String?
-  status       String   @default("Jarayonda")
-  cashboxId    Int
-  createdById  Int
-  approvedById Int?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  approvedAt   DateTime?
-
+  id                Int             @id @default(autoincrement())
+  cashboxId         Int
+  amount            Decimal         @default(0)
+  note              String?
+  status            String          @default("Jarayonda")
+  createdAt         DateTime        @default(now())
+  approvedAt        DateTime?
+  approvedById      Int?
+  createdById       Int
+  updatedAt         DateTime        @updatedAt
   expenseCategoryId Int
-  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id], onDelete: Restrict)
-
-  cashbox    Cashbox @relation(fields: [cashboxId], references: [id], onDelete: Restrict)
-  createdBy  User    @relation("ExpenseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy User?   @relation("ExpenseApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  approvedBy        User?           @relation("ExpenseApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cashbox           Cashbox         @relation(fields: [cashboxId], references: [id])
+  createdBy         User            @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id])
 
   @@index([cashboxId])
   @@index([createdById])
@@ -850,28 +679,25 @@ model Expense {
 }
 
 model ExpenseCategoryGroup {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
+  id         Int               @id @default(autoincrement())
+  name       String            @unique
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
   categories ExpenseCategory[]
 
   @@index([name])
 }
 
 model ExpenseCategory {
-  id        Int      @id @default(autoincrement())
+  id        Int                  @id @default(autoincrement())
   name      String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  groupId Int
-  group   ExpenseCategoryGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-
-  expenses Expense[]
+  isActive  Boolean              @default(true)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+  groupId   Int
+  expenses  Expense[]
+  group     ExpenseCategoryGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, name])
   @@index([groupId])

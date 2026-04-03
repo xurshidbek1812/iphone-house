@@ -202,6 +202,42 @@ export const getOrders = async (req, res) => {
   }
 };
 
+export const getOrderById = async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: {
+          include: {
+            phones: true
+          }
+        },
+        items: {
+          include: {
+            product: true,
+            allocations: {
+              include: {
+                batch: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({ error: "Savdo topilmadi!" });
+    }
+
+    return res.json(order);
+  } catch (error) {
+    console.error('getOrderById xatosi:', error);
+    return res.status(500).json({ error: "Savdoni yuklashda xatolik yuz berdi" });
+  }
+};
+
 export const createDirectOrder = async (req, res) => {
   try {
     const { customerId, otherName, otherPhone, note, items } = req.body;

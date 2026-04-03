@@ -1,6 +1,7 @@
 import express from 'express';
 import {
   getOrders,
+  getOrderById,
   createDirectOrder,
   deleteOrder,
   updateOrderDraft,
@@ -12,6 +13,7 @@ import { authenticateToken } from '../middleware/auth.js';
 const router = express.Router();
 
 router.get('/', authenticateToken, getOrders);
+router.get('/:id', authenticateToken, getOrderById);
 router.post('/direct', authenticateToken, createDirectOrder);
 router.put('/:id', authenticateToken, updateOrderDraft);
 router.patch('/:id/confirm', authenticateToken, confirmOrder);
