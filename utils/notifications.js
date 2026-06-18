@@ -1,14 +1,9 @@
 import { prisma } from '../lib/prisma.js';
 
-export const createDirectorNotification = async ({
-  type,
-  title,
-  message = null,
-  entityType = null,
-  entityId = null,
-  status = null,
-  amount = 0
-}) => {
+export const createDirectorNotification = async (data) => {
+  console.log("NOTIFICATION FUNCTION CALLED");
+  console.log(data);
+
   const directors = await prisma.user.findMany({
     where: {
       role: {
@@ -20,20 +15,24 @@ export const createDirectorNotification = async ({
     }
   });
 
+  console.log("DIRECTORS:", directors);
+
   if (!directors.length) return;
 
   await prisma.notification.createMany({
     data: directors.map((director) => ({
       userId: director.id,
-      type,
-      title,
-      message,
-      entityType,
-      entityId,
-      status,
-      amount
+      type: data.type,
+      title: data.title,
+      message: data.message,
+      entityType: data.entityType,
+      entityId: data.entityId,
+      status: data.status,
+      amount: data.amount
     }))
   });
+
+  console.log("NOTIFICATION CREATED");
 };
 
 export const markNotificationAsRead = async (notificationId, userId) => {
