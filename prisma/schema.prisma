@@ -16,11 +16,13 @@ model User {
   createdAt           DateTime             @default(now())
   phone               String?
   permissions         String[]             @default([])
+  lastLoginAt         DateTime?
   cashTransactions    CashTransaction[]
   cashboxTransactions CashboxTransaction[]
   contracts           Contract[]
   contractComments    ContractComment[]
   approvedExpenses    Expense[]            @relation("ExpenseApprovedBy")
+  cancelledExpenses   Expense[]            @relation("ExpenseCancelledBy")
   createdExpenses     Expense[]            @relation("ExpenseCreatedBy")
   inventoryActs       InventoryAct[]
   notifications       Notification[]
@@ -30,6 +32,11 @@ model User {
   Return              Return[]
   stockMovements      StockMovement[]
   transactions        Transaction[]
+  activityLogs        ActivityLog[]
+  blacklistRequested  BlacklistRequest[]   @relation("BlacklistRequestedBy")
+  blacklistApproved   BlacklistRequest[]   @relation("BlacklistApprovedBy")
+  blacklistCancelled  BlacklistRequest[]   @relation("BlacklistCancelledBy")
+  stockTransfers      StockTransfer[]
 }
 
 model Customer {
@@ -56,15 +63,26 @@ model Customer {
 }
 
 model BlacklistRequest {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   customerId    Int
   type          String
   reason        String
   requesterName String
   approverName  String?
-  status        String   @default("Jarayonda")
-  createdAt     DateTime @default(now())
-  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  status        String    @default("Jarayonda")
+  createdAt     DateTime  @default(now())
+  requestedById Int?
+  approvedById  Int?
+  cancelledById Int?
+  approvedAt    DateTime?
+  cancelledAt   DateTime?
+  customer      Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  requestedBy   User?     @relation("BlacklistRequestedBy", fields: [requestedById], references: [id])
+  approvedBy    User?     @relation("BlacklistApprovedBy", fields: [approvedById], references: [id])
+  cancelledBy   User?     @relation("BlacklistCancelledBy", fields: [cancelledById], references: [id])
+
+  @@index([requestedById])
+  @@index([approvedById])
 }
 
 model CustomerDocument {
@@ -152,6 +170,8 @@ model Product {
   returnItems         ReturnItem[]
   stockMovements      StockMovement[]
   SupplierInvoiceItem SupplierInvoiceItem[]
+  units               ProductUnit[]
+  stockTransfers      StockTransfer[]
 }
 
 model ProductBatch {
@@ -160,6 +180,7 @@ model ProductBatch {
   supplierId            Int?
   supplierInvoiceId     Int?
   supplierInvoiceItemId Int?
+  warehouseId           Int
   initialQty            Float
   quantity              Float
   reservedQty           Float                         @default(0)
@@ -177,12 +198,50 @@ model ProductBatch {
   supplier              Supplier?                     @relation(fields: [supplierId], references: [id])
   supplierInvoice       SupplierInvoice?              @relation(fields: [supplierInvoiceId], references: [id])
   supplierInvoiceItem   SupplierInvoiceItem?          @relation(fields: [supplierInvoiceItemId], references: [id])
+  warehouse             Warehouse                     @relation(fields: [warehouseId], references: [id])
   returnItems           ReturnItem[]
   stockMovements        StockMovement[]
+  units                 ProductUnit[]
+  OrderItem             OrderItem[]
 
   @@index([productId])
   @@index([supplierId])
   @@index([supplierInvoiceId])
+  @@index([warehouseId])
+}
+
+model Warehouse {
+  id            Int               @id @default(autoincrement())
+  name          String            @unique
+  address       String?
+  isActive      Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  batches       ProductBatch[]
+  invoices      SupplierInvoice[]
+  orders        Order[]
+  transfersFrom StockTransfer[]   @relation("TransferFrom")
+  transfersTo   StockTransfer[]   @relation("TransferTo")
+}
+
+model StockTransfer {
+  id              Int       @id @default(autoincrement())
+  productId       Int
+  fromWarehouseId Int
+  toWarehouseId   Int
+  quantity        Float
+  imeis           Json?
+  note            String?
+  userId          Int?
+  createdAt       DateTime  @default(now())
+  product         Product   @relation(fields: [productId], references: [id])
+  fromWarehouse   Warehouse @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouse     Warehouse @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  user            User?     @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
 }
 
 model StockMovement {
@@ -221,24 +280,33 @@ model Supplier {
 }
 
 model SupplierInvoice {
-  id            Int                   @id @default(autoincrement())
-  supplierId    Int?
-  supplierName  String?
-  invoiceNumber String
-  date          DateTime              @default(now())
-  totalSum      Decimal               @default(0)
-  exchangeRate  Decimal               @default(12500)
-  currency      String                @default("USD")
-  status        String                @default("Jarayonda")
-  userName      String?
-  note          String?
-  createdAt     DateTime              @default(now())
-  batches       ProductBatch[]
-  supplier      Supplier?             @relation(fields: [supplierId], references: [id])
-  items         SupplierInvoiceItem[]
+  id              Int                   @id @default(autoincrement())
+  supplierId      Int?
+  supplierName    String?
+  invoiceNumber   String
+  date            DateTime              @default(now())
+  totalSum        Decimal               @default(0)
+  exchangeRate    Decimal               @default(12500)
+  currency        String                @default("USD")
+  status          String                @default("Jarayonda")
+  userName        String?
+  note            String?
+  warehouseId     Int?
+  createdAt       DateTime              @default(now())
+  sentByName      String?
+  sentAt          DateTime?
+  approvedByName  String?
+  approvedAt      DateTime?
+  cancelledByName String?
+  cancelledAt     DateTime?
+  batches         ProductBatch[]
+  supplier        Supplier?             @relation(fields: [supplierId], references: [id])
+  warehouse       Warehouse?            @relation(fields: [warehouseId], references: [id])
+  items           SupplierInvoiceItem[]
 
   @@index([supplierId])
   @@index([invoiceNumber])
+  @@index([warehouseId])
 }
 
 model SupplierInvoiceItem {
@@ -253,12 +321,33 @@ model SupplierInvoiceItem {
   currency          String          @default("UZS")
   markup            Float?
   total             Decimal
+  imeis             Json?
   batches           ProductBatch[]
   product           Product         @relation(fields: [productId], references: [id])
   invoice           SupplierInvoice @relation(fields: [supplierInvoiceId], references: [id], onDelete: Cascade)
 
   @@index([supplierInvoiceId])
   @@index([productId])
+}
+
+model ProductUnit {
+  id          Int          @id @default(autoincrement())
+  productId   Int
+  batchId     Int
+  imei        String       @unique
+  imei2       String?      @unique
+  status      String       @default("IN_STOCK")
+  createdAt   DateTime     @default(now())
+  orderItemId Int?
+  soldAt      DateTime?
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batch       ProductBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  orderItem   OrderItem?   @relation(fields: [orderItemId], references: [id])
+
+  @@index([productId])
+  @@index([batchId])
+  @@index([status])
+  @@index([orderItemId])
 }
 
 model Partner {
@@ -296,50 +385,64 @@ model PartnerLedger {
 }
 
 model Order {
-  id             Int         @id @default(autoincrement())
-  orderNumber    String      @unique
-  orderType      String
-  status         String      @default("COMPLETED")
-  customerId     Int?
-  partnerId      Int?
-  userId         Int
-  subtotal       Decimal
-  discountAmount Decimal     @default(0)
-  totalAmount    Decimal
-  paidAmount     Decimal     @default(0)
-  dueAmount      Decimal     @default(0)
-  note           String?
-  otherName      String?
-  otherPhone     String?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  customer       Customer?   @relation(fields: [customerId], references: [id])
-  partner        Partner?    @relation(fields: [partnerId], references: [id])
-  user           User        @relation(fields: [userId], references: [id])
-  items          OrderItem[]
-  payments       Payment[]
-  returns        Return[]
+  id              Int         @id @default(autoincrement())
+  orderNumber     String      @unique
+  orderType       String
+  status          String      @default("COMPLETED")
+  customerId      Int?
+  partnerId       Int?
+  userId          Int
+  warehouseId     Int?
+  subtotal        Decimal
+  discountAmount  Decimal     @default(0)
+  totalAmount     Decimal
+  paidAmount      Decimal     @default(0)
+  dueAmount       Decimal     @default(0)
+  note            String?
+  otherName       String?
+  otherPhone      String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  confirmedAt     DateTime?
+  confirmedByName String?
+  completedAt     DateTime?
+  completedByName String?
+  cancelledAt     DateTime?
+  cancelledByName String?
+  customer        Customer?   @relation(fields: [customerId], references: [id])
+  partner         Partner?    @relation(fields: [partnerId], references: [id])
+  user            User        @relation(fields: [userId], references: [id])
+  warehouse       Warehouse?  @relation(fields: [warehouseId], references: [id])
+  items           OrderItem[]
+  payments        Payment[]
+  returns         Return[]
 
   @@index([customerId])
   @@index([partnerId])
   @@index([userId])
   @@index([createdAt])
+  @@index([warehouseId])
 }
 
 model OrderItem {
   id             Int                        @id @default(autoincrement())
   orderId        Int
   productId      Int
+  batchId        Int?
   quantity       Float
   unitPrice      Decimal
   discountAmount Decimal                    @default(0)
   totalAmount    Decimal
+  imeis          Json?
   order          Order                      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product        Product                    @relation(fields: [productId], references: [id])
+  batch          ProductBatch?              @relation(fields: [batchId], references: [id])
   allocations    OrderItemBatchAllocation[]
+  units          ProductUnit[]
 
   @@index([orderId])
   @@index([productId])
+  @@index([batchId])
 }
 
 model OrderItemBatchAllocation {
@@ -357,32 +460,36 @@ model OrderItemBatchAllocation {
 }
 
 model Contract {
-  id             Int                  @id @default(autoincrement())
-  contractNumber String               @unique
-  customerId     Int
-  userId         Int
-  totalAmount    Decimal
-  debtAmount     Decimal              @default(0)
-  durationMonths Int                  @default(0)
-  status         String               @default("DRAFT")
-  cancelledAt    DateTime?
-  cashboxId      Int
-  confirmedAt    DateTime?
-  createdAt      DateTime             @default(now())
-  discountAmount Decimal              @default(0)
-  monthlyPayment Decimal              @default(0)
-  note           String?
-  paymentDay     Int                  @default(1)
-  prepayment     Decimal              @default(0)
-  updatedAt      DateTime             @updatedAt
-  cashbox        Cashbox              @relation(fields: [cashboxId], references: [id])
-  customer       Customer             @relation(fields: [customerId], references: [id])
-  user           User                 @relation(fields: [userId], references: [id])
-  coBorrowers    ContractCoBorrower[]
-  comments       ContractComment[]
-  items          ContractItem[]
-  schedules      ContractSchedule[]
-  payments       Payment[]
+  id              Int                  @id @default(autoincrement())
+  contractNumber  String               @unique
+  customerId      Int
+  userId          Int
+  totalAmount     Decimal
+  debtAmount      Decimal              @default(0)
+  durationMonths  Int                  @default(0)
+  status          String               @default("DRAFT")
+  cancelledAt     DateTime?
+  cancelledByName String?
+  cashboxId       Int
+  confirmedAt     DateTime?
+  confirmedByName String?
+  completedAt     DateTime?
+  completedByName String?
+  createdAt       DateTime             @default(now())
+  discountAmount  Decimal              @default(0)
+  monthlyPayment  Decimal              @default(0)
+  note            String?
+  paymentDay      Int                  @default(1)
+  prepayment      Decimal              @default(0)
+  updatedAt       DateTime             @updatedAt
+  cashbox         Cashbox              @relation(fields: [cashboxId], references: [id])
+  customer        Customer             @relation(fields: [customerId], references: [id])
+  user            User                 @relation(fields: [userId], references: [id])
+  coBorrowers     ContractCoBorrower[]
+  comments        ContractComment[]
+  items           ContractItem[]
+  schedules       ContractSchedule[]
+  payments        Payment[]
 
   @@index([customerId])
   @@index([cashboxId])
@@ -645,7 +752,7 @@ model Notification {
   isRead     Boolean   @default(false)
   readAt     DateTime?
   createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  updatedAt  DateTime  @default(now()) @updatedAt
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
@@ -662,10 +769,13 @@ model Expense {
   createdAt         DateTime        @default(now())
   approvedAt        DateTime?
   approvedById      Int?
+  cancelledAt       DateTime?
+  cancelledById     Int?
   createdById       Int
   updatedAt         DateTime        @updatedAt
   expenseCategoryId Int
   approvedBy        User?           @relation("ExpenseApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cancelledBy       User?           @relation("ExpenseCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
   cashbox           Cashbox         @relation(fields: [cashboxId], references: [id])
   createdBy         User            @relation("ExpenseCreatedBy", fields: [createdById], references: [id])
   expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id])
@@ -673,6 +783,7 @@ model Expense {
   @@index([cashboxId])
   @@index([createdById])
   @@index([approvedById])
+  @@index([cancelledById])
   @@index([expenseCategoryId])
   @@index([status])
   @@index([createdAt])
@@ -702,4 +813,26 @@ model ExpenseCategory {
   @@unique([groupId, name])
   @@index([groupId])
   @@index([name])
+}
+
+model ActivityLog {
+  id          Int      @id @default(autoincrement())
+  actorId     Int?
+  actorName   String
+  actorRole   String?
+  action      String
+  entityType  String
+  entityId    Int?
+  entityLabel String?
+  fromStatus  String?
+  toStatus    String?
+  note        String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  actor       User?    @relation(fields: [actorId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
 }

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
+import { logActivity } from '../utils/activityLog.js';
 
 export const login = async (req, res) => {
   try {
@@ -50,6 +51,23 @@ export const login = async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '1d' }
     );
+
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() }
+      });
+
+      await logActivity(prisma, {
+        actor: user,
+        action: 'LOGIN',
+        entityType: 'User',
+        entityId: user.id,
+        entityLabel: user.fullName || user.username
+      });
+    } catch (logError) {
+      console.error('lastLoginAt/login logini yozishda xatolik:', logError);
+    }
 
     return res.json({
       token,

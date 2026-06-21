@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { logActivity } from '../utils/activityLog.js';
 
 export const finishInventory = async (req, res) => {
   const { items, updateStock } = req.body;
@@ -14,9 +15,22 @@ export const finishInventory = async (req, res) => {
       const newAct = await tx.inventoryAct.create({
         data: {
           totalDiff,
-          isStockUpdated: updateStock === true
+          isStockUpdated: updateStock === true,
+          userId: req.user.id
         }
       });
+
+      try {
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'CREATE',
+          entityType: 'InventoryAct',
+          entityId: newAct.id,
+          entityLabel: `Sanoq #${newAct.id}`
+        });
+      } catch (logError) {
+        console.error('Sanoq logini yozishda xatolik:', logError);
+      }
 
       const updatedProductIds = new Set();
 

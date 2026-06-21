@@ -1,7 +1,8 @@
 import { prisma } from '../lib/prisma.js';
 import { generateOrderNumber, allocateStockFIFO } from '../utils/order.js';
+import { logActivity } from '../utils/activityLog.js';
 
-const validateDirectSaleItem = async (tx, item) => {
+const validateDirectSaleItem = async (tx, item, warehouseId = null) => {
   const productId = Number(item.productId || item.id);
   const quantity = Number(item.quantity || item.qty);
   const unitPrice = Number(item.unitPrice || item.salePrice || item.price);
@@ -81,6 +82,12 @@ const validateDirectSaleItem = async (tx, item) => {
     throw new Error("Xato: Mahsulot va partiya mos kelmadi!");
   }
 
+  if (warehouseId && Number(batch.warehouseId) !== Number(warehouseId)) {
+    throw new Error(
+      `Xato: ${batch.product?.name || product.name} uchun tanlangan partiya boshqa omborga tegishli!`
+    );
+  }
+
   if (Number(batch.quantity) < quantity) {
     throw new Error(
       `Xato: ${batch.product?.name || product.name} uchun partiyada yetarli qoldiq yo'q!`
@@ -89,6 +96,49 @@ const validateDirectSaleItem = async (tx, item) => {
 
   const lineTotal = lineSubtotal - lineDiscount;
 
+  const rawImeis = Array.isArray(item.imeis)
+    ? item.imeis.map((imei) => String(imei || '').trim()).filter(Boolean)
+    : [];
+
+  let imeis = null;
+
+  if (rawImeis.length > 0) {
+    if (rawImeis.length !== quantity) {
+      throw new Error(
+        `Xato: ${product.name} uchun IMEI sonlari (${rawImeis.length}) miqdorga (${quantity}) teng emas!`
+      );
+    }
+
+    if (new Set(rawImeis).size !== rawImeis.length) {
+      throw new Error(`Xato: ${product.name} uchun IMEI raqamlari ichida takrorlanish bor!`);
+    }
+
+    const units = await tx.productUnit.findMany({
+      where: { imei: { in: rawImeis } }
+    });
+
+    const notFound = rawImeis.filter((imei) => !units.some((u) => u.imei === imei));
+    if (notFound.length > 0) {
+      throw new Error(`Xato: Quyidagi IMEI raqamlar topilmadi: ${notFound.join(', ')}`);
+    }
+
+    const wrongBatch = units.filter((u) => u.batchId !== batchId);
+    if (wrongBatch.length > 0) {
+      throw new Error(
+        `Xato: Quyidagi IMEI raqamlar tanlangan partiyaga tegishli emas: ${wrongBatch.map((u) => u.imei).join(', ')}`
+      );
+    }
+
+    const notInStock = units.filter((u) => u.status !== 'IN_STOCK');
+    if (notInStock.length > 0) {
+      throw new Error(
+        `Xato: Quyidagi IMEI raqamlar band yoki sotilgan: ${notInStock.map((u) => u.imei).join(', ')}`
+      );
+    }
+
+    imeis = rawImeis;
+  }
+
   return {
     productId,
     quantity,
@@ -96,7 +146,8 @@ const validateDirectSaleItem = async (tx, item) => {
     discountAmount: lineDiscount,
     totalAmount: lineTotal,
     batchId,
-    scanType: 'BATCH'
+    scanType: 'BATCH',
+    imeis
   };
 };
 
@@ -173,15 +224,24 @@ export const getOrders = async (req, res) => {
               phone: true
             }
           },
+          warehouse: true,
           items: {
             include: {
               product: true,
               allocations: {
-                include: { batch: true }
+                include: { batch: { include: { warehouse: true } } }
               }
             }
           },
-          payments: true
+          payments: {
+            include: {
+              user: {
+                select: { id: true, fullName: true, username: true }
+              },
+              cashbox: true
+            },
+            orderBy: { paidAt: 'asc' }
+          }
         },
         orderBy: { id: 'desc' },
         skip,
@@ -214,15 +274,28 @@ export const getOrderById = async (req, res) => {
             phones: true
           }
         },
+        user: {
+          select: { id: true, fullName: true, username: true, role: true, phone: true }
+        },
+        warehouse: true,
         items: {
           include: {
             product: true,
             allocations: {
               include: {
-                batch: true
+                batch: { include: { warehouse: true } }
               }
             }
           }
+        },
+        payments: {
+          include: {
+            user: {
+              select: { id: true, fullName: true, username: true }
+            },
+            cashbox: true
+          },
+          orderBy: { paidAt: 'asc' }
         }
       }
     });
@@ -240,10 +313,14 @@ export const getOrderById = async (req, res) => {
 
 export const createDirectOrder = async (req, res) => {
   try {
-    const { customerId, otherName, otherPhone, note, items } = req.body;
+    const { customerId, otherName, otherPhone, note, items, warehouseId } = req.body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Savdo uchun tovarlar kiritilmadi!" });
+    }
+
+    if (!warehouseId) {
+      return res.status(400).json({ error: "Ombor tanlanmagan!" });
     }
 
     const toUpperText = (value) => {
@@ -253,12 +330,20 @@ export const createDirectOrder = async (req, res) => {
 
     const txResult = await prisma.$transaction(
       async (tx) => {
+        const warehouse = await tx.warehouse.findUnique({
+          where: { id: Number(warehouseId) }
+        });
+
+        if (!warehouse || !warehouse.isActive) {
+          throw new Error("Xato: Tanlangan ombor topilmadi yoki faol emas!");
+        }
+
         let subtotal = 0;
         let totalDiscount = 0;
         const preparedItems = [];
 
         for (const item of items) {
-          const preparedItem = await validateDirectSaleItem(tx, item);
+          const preparedItem = await validateDirectSaleItem(tx, item, warehouse.id);
 
           subtotal += preparedItem.quantity * preparedItem.unitPrice;
           totalDiscount += preparedItem.discountAmount;
@@ -281,6 +366,7 @@ export const createDirectOrder = async (req, res) => {
             status: 'DRAFT',
             customerId: customerId ? Number(customerId) : null,
             userId: req.user.id,
+            warehouseId: warehouse.id,
             subtotal,
             discountAmount: totalDiscount,
             totalAmount,
@@ -297,13 +383,24 @@ export const createDirectOrder = async (req, res) => {
             data: {
               orderId: createdOrder.id,
               productId: preparedItem.productId,
+              batchId: preparedItem.batchId,
               quantity: preparedItem.quantity,
               unitPrice: preparedItem.unitPrice,
               discountAmount: preparedItem.discountAmount,
-              totalAmount: preparedItem.totalAmount
+              totalAmount: preparedItem.totalAmount,
+              imeis: preparedItem.imeis
             }
           });
         }
+
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'CREATE',
+          entityType: 'Order',
+          entityId: createdOrder.id,
+          entityLabel: createdOrder.orderNumber,
+          toStatus: 'DRAFT'
+        });
 
         return { orderId: createdOrder.id };
       },
@@ -396,6 +493,19 @@ export const deleteOrder = async (req, res) => {
         }
       }
 
+      const orderItemIds = order.items.map((item) => item.id);
+
+      if (orderItemIds.length > 0) {
+        await tx.productUnit.updateMany({
+          where: { orderItemId: { in: orderItemIds } },
+          data: {
+            status: 'IN_STOCK',
+            orderItemId: null,
+            soldAt: null
+          }
+        });
+      }
+
       for (const payment of order.payments) {
         if (payment.cashboxId && payment.direction === 'IN' && payment.status === 'POSTED') {
           await tx.cashbox.update({
@@ -419,8 +529,6 @@ export const deleteOrder = async (req, res) => {
         where: { sourceType: 'ORDER', sourceId: orderId }
       });
 
-      const orderItemIds = order.items.map((item) => item.id);
-
       if (orderItemIds.length > 0) {
         await tx.orderItemBatchAllocation.deleteMany({
           where: {
@@ -437,7 +545,19 @@ export const deleteOrder = async (req, res) => {
         where: { id: orderId }
       });
 
+      await logActivity(tx, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Order',
+        entityId: orderId,
+        entityLabel: order.orderNumber,
+        fromStatus: order.status
+      });
+
       return true;
+    }, {
+      maxWait: 10000,
+      timeout: 20000
     });
 
     res.json({
@@ -494,7 +614,7 @@ export const updateOrderDraft = async (req, res) => {
         const preparedItems = [];
 
         for (const item of items) {
-          const preparedItem = await validateDirectSaleItem(tx, item);
+          const preparedItem = await validateDirectSaleItem(tx, item, existingOrder.warehouseId);
 
           subtotal += preparedItem.quantity * preparedItem.unitPrice;
           totalDiscount += preparedItem.discountAmount;
@@ -531,13 +651,23 @@ export const updateOrderDraft = async (req, res) => {
             data: {
               orderId,
               productId: preparedItem.productId,
+              batchId: preparedItem.batchId,
               quantity: preparedItem.quantity,
               unitPrice: preparedItem.unitPrice,
               discountAmount: preparedItem.discountAmount,
-              totalAmount: preparedItem.totalAmount
+              totalAmount: preparedItem.totalAmount,
+              imeis: preparedItem.imeis
             }
           });
         }
+
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'UPDATE',
+          entityType: 'Order',
+          entityId: orderId,
+          entityLabel: existingOrder.orderNumber
+        });
 
         return { orderId };
       },
@@ -604,8 +734,20 @@ export const confirmOrder = async (req, res) => {
     await prisma.order.update({
       where: { id: orderId },
       data: {
-        status: 'PAYMENT_PENDING'
+        status: 'PAYMENT_PENDING',
+        confirmedByName: req.user.fullName || req.user.username,
+        confirmedAt: new Date()
       }
+    });
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'CONFIRM',
+      entityType: 'Order',
+      entityId: orderId,
+      entityLabel: order.orderNumber,
+      fromStatus: 'DRAFT',
+      toStatus: 'PAYMENT_PENDING'
     });
 
     res.json({
@@ -701,6 +843,15 @@ export const collectOrderPayment = async (req, res) => {
           }
         });
 
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'CREATE',
+          entityType: 'Payment',
+          entityId: payment.id,
+          entityLabel: `Order #${order.orderNumber}: ${paymentAmount.toLocaleString('uz-UZ')} UZS`,
+          metadata: { orderId: order.id, cashbox: cashbox.name, amount: paymentAmount }
+        });
+
         await tx.cashbox.update({
           where: { id: cashbox.id },
           data: {
@@ -723,11 +874,51 @@ export const collectOrderPayment = async (req, res) => {
 
         if (newDueAmount <= 0) {
           for (const item of order.items) {
+            const itemImeis = Array.isArray(item.imeis) ? item.imeis : null;
+            let preferredBatchId = item.batchId || null;
+
+            if (itemImeis && itemImeis.length > 0) {
+              const units = await tx.productUnit.findMany({
+                where: { imei: { in: itemImeis } }
+              });
+
+              const notInStock = units.filter((u) => u.status !== 'IN_STOCK');
+              if (notInStock.length > 0) {
+                throw new Error(
+                  `Xato: Quyidagi IMEI raqamlar allaqachon sotilgan: ${notInStock.map((u) => u.imei).join(', ')}`
+                );
+              }
+
+              preferredBatchId = units[0]?.batchId || preferredBatchId;
+            }
+
             const { allocations } = await allocateStockFIFO(
               tx,
               item.productId,
-              Number(item.quantity)
+              Number(item.quantity),
+              preferredBatchId,
+              order.warehouseId
             );
+
+            if (itemImeis && itemImeis.length > 0) {
+              await tx.productUnit.updateMany({
+                where: { imei: { in: itemImeis } },
+                data: {
+                  status: 'SOLD',
+                  orderItemId: item.id,
+                  soldAt: new Date()
+                }
+              });
+
+              await logActivity(tx, {
+                actor: req.user,
+                action: 'COMPLETE',
+                entityType: 'ProductUnit',
+                entityLabel: itemImeis.join(', '),
+                note: `Order ${order.orderNumber} bo'yicha sotildi`,
+                metadata: { orderId: order.id, orderItemId: item.id, imeis: itemImeis }
+              });
+            }
 
             for (const allocation of allocations) {
               await tx.orderItemBatchAllocation.create({
@@ -775,11 +966,23 @@ export const collectOrderPayment = async (req, res) => {
             where: { id: order.id },
             data: {
               status: 'COMPLETED',
-              dueAmount: 0
+              dueAmount: 0,
+              completedByName: req.user.fullName || req.user.username,
+              completedAt: new Date()
             }
           });
 
           newStatus = 'COMPLETED';
+
+          await logActivity(tx, {
+            actor: req.user,
+            action: 'COMPLETE',
+            entityType: 'Order',
+            entityId: order.id,
+            entityLabel: order.orderNumber,
+            fromStatus: 'PAYMENT_PENDING',
+            toStatus: 'COMPLETED'
+          });
         }
 
         return {

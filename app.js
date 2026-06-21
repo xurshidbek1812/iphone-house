@@ -21,6 +21,8 @@ import authRoutes from './routes/auth.routes.js';
 import expensesRoutes from './routes/expenses.routes.js';
 import expenseCategoriesRoutes from './routes/expense-categories.routes.js';
 import reportsRoutes from './routes/reports.routes.js';
+import activityRoutes from './routes/activity.routes.js';
+import warehousesRoutes from './routes/warehouses.routes.js';
 
 import { getRegions } from './controllers/customers.controller.js';
 
@@ -82,5 +84,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/expenses', expensesRoutes);
 app.use('/api/expense-categories', expenseCategoriesRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/activity-logs', activityRoutes);
+app.use('/api/warehouses', warehousesRoutes);
 
 export default app;

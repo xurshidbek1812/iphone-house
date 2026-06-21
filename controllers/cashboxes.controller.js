@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { Prisma } from '@prisma/client';
 import { PERMISSIONS } from '../utils/permissions.js';
 import { randomUUID } from 'crypto';
+import { logActivity } from '../utils/activityLog.js';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -51,6 +52,18 @@ export const createCashbox = async (req, res) => {
         balance: 0
       }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'Cashbox',
+        entityId: newCashbox.id,
+        entityLabel: newCashbox.name
+      });
+    } catch (logError) {
+      console.error("Kassa yaratish logini yozishda xatolik:", logError);
+    }
 
     res.json(newCashbox);
   } catch (error) {
@@ -120,6 +133,18 @@ export const updateCashbox = async (req, res) => {
       }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Cashbox',
+        entityId: updatedCashbox.id,
+        entityLabel: updatedCashbox.name
+      });
+    } catch (logError) {
+      console.error("Kassani yangilash logini yozishda xatolik:", logError);
+    }
+
     res.json(updatedCashbox);
   } catch (error) {
     console.error("Kassani yangilashda xatolik:", error);
@@ -166,6 +191,18 @@ export const deleteCashbox = async (req, res) => {
       where: { id: cashboxId }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Cashbox',
+        entityId: cashboxId,
+        entityLabel: existingCashbox.name
+      });
+    } catch (logError) {
+      console.error("Kassani o'chirish logini yozishda xatolik:", logError);
+    }
+
     res.json({
       success: true,
       message: "Kassa o'chirildi"
@@ -205,6 +242,18 @@ export const updateCashboxStatus = async (req, res) => {
         isActive: Boolean(isActive)
       }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Cashbox',
+        entityId: updatedCashbox.id,
+        entityLabel: updatedCashbox.name
+      });
+    } catch (logError) {
+      console.error("Kassa holatini o'zgartirish logini yozishda xatolik:", logError);
+    }
 
     res.json(updatedCashbox);
   } catch (error) {
@@ -269,6 +318,18 @@ export const depositCashbox = async (req, res) => {
           userId: req.user.id
         }
       });
+
+      try {
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'DEPOSIT',
+          entityType: 'CashboxTransaction',
+          entityId: cashboxId,
+          entityLabel: `${cashbox.name}: ${parsedAmount}`
+        });
+      } catch (logError) {
+        console.error("Kassaga kirim logini yozishda xatolik:", logError);
+      }
 
       return updatedCashbox;
     });
@@ -342,6 +403,18 @@ export const withdrawCashbox = async (req, res) => {
           userId: req.user.id
         }
       });
+
+      try {
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'WITHDRAW',
+          entityType: 'CashboxTransaction',
+          entityId: cashboxId,
+          entityLabel: `${cashbox.name}: ${parsedAmount}`
+        });
+      } catch (logError) {
+        console.error("Kassadan chiqim logini yozishda xatolik:", logError);
+      }
 
       return updatedCashbox;
     });
@@ -483,6 +556,18 @@ export const transferBetweenCashboxes = async (req, res) => {
           transferGroupId
         }
       });
+
+      try {
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'TRANSFER',
+          entityType: 'CashboxTransaction',
+          entityId: fromId,
+          entityLabel: `${fromCashbox.name} -> ${toCashbox.name}: ${parsedAmount}`
+        });
+      } catch (logError) {
+        console.error("Kassalar o'tkazmasi logini yozishda xatolik:", logError);
+      }
 
       return { success: true };
     });

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -121,6 +122,18 @@ export const createUser = async (req, res) => {
         permissions: true
       }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'User',
+        entityId: newUser.id,
+        entityLabel: newUser.fullName || newUser.username
+      });
+    } catch (logError) {
+      console.error('Xodim qo\'shish logini yozishda xatolik:', logError);
+    }
 
     res.json(newUser);
   } catch (error) {
@@ -253,6 +266,22 @@ export const updateUser = async (req, res) => {
       }
     });
 
+    const roleOrPermissionsChanged =
+      !isSelfEdit && canManageUsers && (role !== undefined || permissions !== undefined);
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'User',
+        entityId: updatedUser.id,
+        entityLabel: updatedUser.fullName || updatedUser.username,
+        note: roleOrPermissionsChanged ? "Rol/huquqlar o'zgartirildi" : undefined
+      });
+    } catch (logError) {
+      console.error('Xodimni tahrirlash logini yozishda xatolik:', logError);
+    }
+
     res.json(updatedUser);
   } catch (error) {
     console.error('updateUser xatosi:', error);
@@ -276,7 +305,9 @@ export const deleteUser = async (req, res) => {
   where: { id: targetUserId },
   select: {
     id: true,
-    role: true
+    role: true,
+    fullName: true,
+    username: true
   }
 });
 
@@ -303,6 +334,18 @@ if (String(targetUser.role || '').toLowerCase() === 'director') {
     await prisma.user.delete({
       where: { id: targetUserId }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'User',
+        entityId: targetUserId,
+        entityLabel: targetUser.fullName || targetUser.username
+      });
+    } catch (logError) {
+      console.error("Xodimni o'chirish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {

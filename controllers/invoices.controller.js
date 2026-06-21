@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { createDirectorNotification } from '../utils/notifications.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const ALLOWED_STATUSES = ['Jarayonda', 'Yuborildi', 'Tasdiqlandi', 'Bekor qilindi'];
 
@@ -20,6 +21,14 @@ const canManageDraftInvoice = (user) => {
 const canEditInvoice = (user) => {
   const role = String(user?.role || '').toLowerCase();
   return role === 'admin' || role === 'director' || hasApprovePermission(user);
+};
+
+const normalizeImeis = (imeis) => {
+  if (!Array.isArray(imeis) || imeis.length === 0) return null;
+  return imeis.map((pair) => ({
+    imei: String(pair?.imei || '').trim(),
+    imei2: String(pair?.imei2 || '').trim()
+  }));
 };
 
 const validateInvoiceItems = (items) => {
@@ -48,6 +57,47 @@ const validateInvoiceItems = (items) => {
     if (Number.isNaN(salePrice) || salePrice < 0) {
       return "Sotuv narxi noto'g'ri!";
     }
+
+    const imeis = normalizeImeis(item.imeis);
+    if (imeis) {
+      if (imeis.length !== count) {
+        return `${item.name || "Mahsulot"} uchun IMEI sonlari (${imeis.length}) miqdorga (${count}) teng emas!`;
+      }
+
+      const flatCodes = imeis.flatMap((pair) => [pair.imei, pair.imei2]);
+
+      if (flatCodes.some((code) => !code)) {
+        return `${item.name || "Mahsulot"} uchun har bir telefonda ikkita IMEI ham kiritilishi shart!`;
+      }
+
+      if (new Set(flatCodes).size !== flatCodes.length) {
+        return `${item.name || "Mahsulot"} uchun IMEI raqamlari ichida takrorlanish bor!`;
+      }
+    }
+  }
+
+  return null;
+};
+
+const checkImeisNotTaken = async (items) => {
+  const allCodes = items.flatMap((item) => {
+    const imeis = normalizeImeis(item.imeis);
+    if (!imeis) return [];
+    return imeis.flatMap((pair) => [pair.imei, pair.imei2]);
+  });
+
+  if (allCodes.length === 0) return null;
+
+  const existing = await prisma.productUnit.findMany({
+    where: {
+      OR: [{ imei: { in: allCodes } }, { imei2: { in: allCodes } }]
+    },
+    select: { imei: true, imei2: true }
+  });
+
+  if (existing.length > 0) {
+    const taken = existing.flatMap((u) => [u.imei, u.imei2].filter(Boolean));
+    return `Quyidagi IMEI raqamlar allaqachon mavjud: ${taken.join(', ')}`;
   }
 
   return null;
@@ -94,7 +144,7 @@ export const getInvoices = async (req, res) => {
       prisma.supplierInvoice.count({ where }),
       prisma.supplierInvoice.findMany({
         where,
-        include: { items: true },
+        include: { items: true, warehouse: true },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit
@@ -130,6 +180,7 @@ export const createInvoice = async (req, res) => {
       totalSum,
       status,
       userName,
+      warehouseId,
       items
     } = req.body;
 
@@ -145,9 +196,30 @@ export const createInvoice = async (req, res) => {
       });
     }
 
+    if (!warehouseId) {
+      return res.status(400).json({
+        error: "Ombor tanlanishi shart!"
+      });
+    }
+
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: Number(warehouseId) }
+    });
+
+    if (!warehouse || !warehouse.isActive) {
+      return res.status(400).json({
+        error: "Tanlangan ombor topilmadi yoki faol emas!"
+      });
+    }
+
     const itemsError = validateInvoiceItems(items);
     if (itemsError) {
       return res.status(400).json({ error: itemsError });
+    }
+
+    const imeiConflictError = await checkImeisNotTaken(items);
+    if (imeiConflictError) {
+      return res.status(400).json({ error: imeiConflictError });
     }
 
     const safeStatus = ALLOWED_STATUSES.includes(status) ? status : 'Jarayonda';
@@ -166,6 +238,7 @@ export const createInvoice = async (req, res) => {
         exchangeRate: Number(exchangeRate || 0),
         totalSum: Number(totalSum || 0),
         status: safeStatus,
+        warehouseId: warehouse.id,
         userName: userName || req.user?.fullName || req.user?.username || 'Noma’lum',
         items: {
           create: items.map((item) => ({
@@ -177,11 +250,12 @@ export const createInvoice = async (req, res) => {
             salePrice: Number(item.salePrice || 0),
             currency: item.currency || 'UZS',
             markup: Number(item.markup || 0),
-            total: Number(item.total || 0)
+            total: Number(item.total || 0),
+            imeis: normalizeImeis(item.imeis)
           }))
         }
       },
-      include: { items: true }
+      include: { items: true, warehouse: true }
     });
 
     if (safeStatus === 'Yuborildi') {
@@ -195,6 +269,15 @@ export const createInvoice = async (req, res) => {
         amount: Number(newInvoice.totalSum || 0)
       });
     }
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'CREATE',
+      entityType: 'SupplierInvoice',
+      entityId: newInvoice.id,
+      entityLabel: newInvoice.invoiceNumber,
+      toStatus: newInvoice.status
+    });
 
     return res.json(newInvoice);
   } catch (error) {
@@ -218,6 +301,7 @@ export const updateInvoice = async (req, res) => {
       exchangeRate,
       totalSum,
       status,
+      warehouseId,
       items
     } = req.body;
 
@@ -253,9 +337,30 @@ export const updateInvoice = async (req, res) => {
       });
     }
 
+    if (!warehouseId) {
+      return res.status(400).json({
+        error: "Ombor tanlanishi shart!"
+      });
+    }
+
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: Number(warehouseId) }
+    });
+
+    if (!warehouse || !warehouse.isActive) {
+      return res.status(400).json({
+        error: "Tanlangan ombor topilmadi yoki faol emas!"
+      });
+    }
+
     const itemsError = validateInvoiceItems(items);
     if (itemsError) {
       return res.status(400).json({ error: itemsError });
+    }
+
+    const imeiConflictError = await checkImeisNotTaken(items);
+    if (imeiConflictError) {
+      return res.status(400).json({ error: imeiConflictError });
     }
 
     const safeStatus = ALLOWED_STATUSES.includes(status)
@@ -280,7 +385,8 @@ export const updateInvoice = async (req, res) => {
       markup: Number(item.markup || 0),
       total:
         Number(item.total || 0) ||
-        Number(item.count || 0) * Number(item.price || 0)
+        Number(item.count || 0) * Number(item.price || 0),
+      imeis: normalizeImeis(item.imeis)
     }));
 
     const invalidItem = normalizedItems.find(
@@ -320,7 +426,8 @@ export const updateInvoice = async (req, res) => {
           invoiceNumber: String(invoiceNumber).trim(),
           exchangeRate: Number(exchangeRate || 0),
           totalSum: Number(totalSum || 0),
-          status: safeStatus
+          status: safeStatus,
+          warehouseId: warehouse.id
         }
       });
 
@@ -331,6 +438,14 @@ export const updateInvoice = async (req, res) => {
       await tx.supplierInvoiceItem.createMany({
         data: normalizedItems
       });
+    });
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'UPDATE',
+      entityType: 'SupplierInvoice',
+      entityId: invoiceId,
+      entityLabel: String(invoiceNumber).trim()
     });
 
     return res.json({ success: true });
@@ -362,7 +477,7 @@ export const updateInvoiceStatus = async (req, res) => {
 
     const invoice = await prisma.supplierInvoice.findUnique({
       where: { id: invoiceId },
-      include: { items: true }
+      include: { items: true, warehouse: true }
     });
 
     if (!invoice) {
@@ -390,7 +505,11 @@ export const updateInvoiceStatus = async (req, res) => {
 
       const updatedInvoice = await prisma.supplierInvoice.update({
         where: { id: invoiceId },
-        data: { status: 'Yuborildi' }
+        data: {
+          status: 'Yuborildi',
+          sentByName: req.user.fullName || req.user.username,
+          sentAt: new Date()
+        }
       });
 
       await createDirectorNotification({
@@ -401,6 +520,16 @@ export const updateInvoiceStatus = async (req, res) => {
         entityId: updatedInvoice.id,
         status: 'Yuborildi',
         amount: Number(invoice.totalSum || 0)
+      });
+
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'SEND',
+        entityType: 'SupplierInvoice',
+        entityId: invoiceId,
+        entityLabel: invoice.invoiceNumber,
+        fromStatus: invoice.status,
+        toStatus: 'Yuborildi'
       });
 
       return res.json({ success: true });
@@ -415,7 +544,11 @@ export const updateInvoiceStatus = async (req, res) => {
 
       await prisma.supplierInvoice.update({
         where: { id: invoiceId },
-        data: { status: 'Bekor qilindi' }
+        data: {
+          status: 'Bekor qilindi',
+          cancelledByName: req.user.fullName || req.user.username,
+          cancelledAt: new Date()
+        }
       });
 
       await prisma.notification.updateMany({
@@ -426,6 +559,16 @@ export const updateInvoiceStatus = async (req, res) => {
         data: {
           status: 'Bekor qilindi'
         }
+      });
+
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CANCEL',
+        entityType: 'SupplierInvoice',
+        entityId: invoiceId,
+        entityLabel: invoice.invoiceNumber,
+        fromStatus: invoice.status,
+        toStatus: 'Bekor qilindi'
       });
 
       return res.json({ success: true });
@@ -450,6 +593,17 @@ export const updateInvoiceStatus = async (req, res) => {
         });
       }
 
+      if (!invoice.warehouseId) {
+        return res.status(400).json({
+          error: "Faktura uchun ombor belgilanmagan!"
+        });
+      }
+
+      const imeiConflictError = await checkImeisNotTaken(invoice.items);
+      if (imeiConflictError) {
+        return res.status(400).json({ error: imeiConflictError });
+      }
+
       await prisma.$transaction(async (tx) => {
         for (const item of invoice.items) {
           const productId = Number(item.productId);
@@ -470,9 +624,10 @@ export const updateInvoiceStatus = async (req, res) => {
             throw new Error(`Mahsulot topilmadi. Product ID: ${productId}`);
           }
 
-          await tx.productBatch.create({
+          const newBatch = await tx.productBatch.create({
             data: {
               productId,
+              warehouseId: invoice.warehouseId,
               supplierInvoiceId: invoice.id,
               supplierInvoiceItemId: item.id,
               initialQty: addedQty,
@@ -484,6 +639,19 @@ export const updateInvoiceStatus = async (req, res) => {
               invoiceNumber: invoice.invoiceNumber ? String(invoice.invoiceNumber) : null
             }
           });
+
+          const imeis = normalizeImeis(item.imeis);
+          if (imeis) {
+            await tx.productUnit.createMany({
+              data: imeis.map((pair) => ({
+                productId,
+                batchId: newBatch.id,
+                imei: pair.imei,
+                imei2: pair.imei2,
+                status: 'IN_STOCK'
+              }))
+            });
+          }
 
           await tx.product.update({
             where: { id: productId },
@@ -498,7 +666,11 @@ export const updateInvoiceStatus = async (req, res) => {
 
         await tx.supplierInvoice.update({
           where: { id: invoiceId },
-          data: { status: 'Tasdiqlandi' }
+          data: {
+            status: 'Tasdiqlandi',
+            approvedByName: req.user.fullName || req.user.username,
+            approvedAt: new Date()
+          }
         });
 
         await tx.notification.updateMany({
@@ -509,6 +681,16 @@ export const updateInvoiceStatus = async (req, res) => {
           data: {
             status: 'Tasdiqlandi'
           }
+        });
+
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'APPROVE',
+          entityType: 'SupplierInvoice',
+          entityId: invoiceId,
+          entityLabel: invoice.invoiceNumber,
+          fromStatus: invoice.status,
+          toStatus: 'Tasdiqlandi'
         });
       });
 
@@ -618,6 +800,15 @@ export const deleteInvoice = async (req, res) => {
       await tx.supplierInvoice.delete({
         where: { id: invoice.id }
       });
+    });
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'DELETE',
+      entityType: 'SupplierInvoice',
+      entityId: invoice.id,
+      entityLabel: invoice.invoiceNumber,
+      fromStatus: invoice.status
     });
 
     return res.json({

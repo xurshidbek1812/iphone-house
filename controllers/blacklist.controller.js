@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { createDirectorNotification } from '../utils/notifications.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 export const getBlacklistRequests = async (req, res) => {
   try {
@@ -18,15 +19,34 @@ export const getBlacklistRequests = async (req, res) => {
 
 export const createBlacklistRequest = async (req, res) => {
   try {
-    const { customerId, type, reason, requesterName } = req.body;
+    const { customerId, type, reason } = req.body;
 
     const newReq = await prisma.blacklistRequest.create({
       data: {
         customerId: Number(customerId),
         type,
         reason,
-        requesterName
+        requesterName: req.user.fullName || req.user.username,
+        requestedById: req.user.id
       }
+    });
+
+    const customer = await prisma.customer.findUnique({
+      where: { id: newReq.customerId },
+      select: { firstName: true, lastName: true, middleName: true }
+    });
+
+    const customerLabel = [customer?.lastName, customer?.firstName, customer?.middleName]
+      .filter(Boolean)
+      .join(' ') || String(newReq.customerId);
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'CREATE',
+      entityType: 'BlacklistRequest',
+      entityId: newReq.id,
+      entityLabel: customerLabel,
+      toStatus: newReq.status
     });
 
     res.json(newReq);
@@ -54,7 +74,7 @@ export const updateBlacklistRequest = async (req, res) => {
 
 export const updateBlacklistRequestStatus = async (req, res) => {
   try {
-    const { status, approverName } = req.body;
+    const { status } = req.body;
     const reqId = Number(req.params.id);
 
     const request = await prisma.blacklistRequest.findUnique({
@@ -80,13 +100,36 @@ export const updateBlacklistRequestStatus = async (req, res) => {
       });
     }
 
+    const updateData = { status };
+
+    if (status === 'Tasdiqlandi') {
+      updateData.approverName = req.user.fullName || req.user.username;
+      updateData.approvedById = req.user.id;
+      updateData.approvedAt = new Date();
+    }
+
+    if (status === 'Bekor qilindi') {
+      updateData.cancelledById = req.user.id;
+      updateData.cancelledAt = new Date();
+    }
+
     const updatedRequest = await prisma.blacklistRequest.update({
       where: { id: reqId },
-      data: {
-        status,
-        approverName: approverName || null
-      }
+      data: updateData
     });
+
+    const customerForLabel = await prisma.customer.findUnique({
+      where: { id: request.customerId },
+      select: { firstName: true, lastName: true, middleName: true }
+    });
+
+    const customerLabel = [
+      customerForLabel?.lastName,
+      customerForLabel?.firstName,
+      customerForLabel?.middleName
+    ]
+      .filter(Boolean)
+      .join(' ') || String(request.customerId);
 
     if (status === 'Tasdiqlandi') {
       await prisma.customer.update({
@@ -94,6 +137,28 @@ export const updateBlacklistRequestStatus = async (req, res) => {
         data: {
           isBlacklisted: request.type === 'ADD'
         }
+      });
+
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'APPROVE',
+        entityType: 'BlacklistRequest',
+        entityId: updatedRequest.id,
+        entityLabel: customerLabel,
+        fromStatus: request.status,
+        toStatus: 'Tasdiqlandi'
+      });
+    }
+
+    if (status === 'Bekor qilindi') {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CANCEL',
+        entityType: 'BlacklistRequest',
+        entityId: updatedRequest.id,
+        entityLabel: customerLabel,
+        fromStatus: request.status,
+        toStatus: 'Bekor qilindi'
       });
     }
 
@@ -127,6 +192,16 @@ export const updateBlacklistRequestStatus = async (req, res) => {
         status: 'Yuborildi',
         amount: 0
       });
+
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'SEND',
+        entityType: 'BlacklistRequest',
+        entityId: updatedRequest.id,
+        entityLabel: fullName || customerLabel,
+        fromStatus: request.status,
+        toStatus: 'Yuborildi'
+      });
     }
 
     if (status === 'Tasdiqlandi' || status === 'Bekor qilindi') {
@@ -150,8 +225,34 @@ export const updateBlacklistRequestStatus = async (req, res) => {
 
 export const deleteBlacklistRequest = async (req, res) => {
   try {
+    const reqId = Number(req.params.id);
+
+    const request = await prisma.blacklistRequest.findUnique({
+      where: { id: reqId },
+      include: {
+        customer: {
+          select: { firstName: true, lastName: true, middleName: true }
+        }
+      }
+    });
+
     await prisma.blacklistRequest.delete({
-      where: { id: Number(req.params.id) }
+      where: { id: reqId }
+    });
+
+    const customerLabel = request
+      ? [request.customer?.lastName, request.customer?.firstName, request.customer?.middleName]
+          .filter(Boolean)
+          .join(' ') || String(request.customerId)
+      : String(reqId);
+
+    await logActivity(prisma, {
+      actor: req.user,
+      action: 'DELETE',
+      entityType: 'BlacklistRequest',
+      entityId: reqId,
+      entityLabel: customerLabel,
+      fromStatus: request?.status
     });
 
     res.json({ success: true });

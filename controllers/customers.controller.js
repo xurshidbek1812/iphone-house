@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const toUpperName = (value) => {
   if (value === null || value === undefined) return value;
@@ -69,6 +70,18 @@ export const createCustomer = async (req, res) => {
 
       return customer;
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'Customer',
+        entityId: newCustomer.id,
+        entityLabel: [newCustomer.firstName, newCustomer.lastName].filter(Boolean).join(' ')
+      });
+    } catch (logError) {
+      console.error("Mijoz qo'shish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true, customer: newCustomer });
   } catch (error) {
@@ -258,6 +271,18 @@ export const updateCustomer = async (req, res) => {
       return { success: true, id: customerId };
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Customer',
+        entityId: customerId,
+        entityLabel: [toUpperName(data.firstName), toUpperName(data.lastName)].filter(Boolean).join(' ')
+      });
+    } catch (logError) {
+      console.error("Mijozni yangilash logini yozishda xatolik:", logError);
+    }
+
     res.json(updatedCustomer);
   } catch (error) {
     console.error("Mijozni yangilashda xatolik:", error);
@@ -277,6 +302,10 @@ export const deleteCustomer = async (req, res) => {
   const customerId = Number(req.params.id);
 
   try {
+    const existingCustomer = await prisma.customer.findUnique({
+      where: { id: customerId }
+    });
+
     await prisma.$transaction(async (tx) => {
       await tx.customerDocument.deleteMany({ where: { customerId } });
       await tx.customerAddress.deleteMany({ where: { customerId } });
@@ -285,6 +314,20 @@ export const deleteCustomer = async (req, res) => {
 
       await tx.customer.delete({ where: { id: customerId } });
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Customer',
+        entityId: customerId,
+        entityLabel: existingCustomer
+          ? [existingCustomer.firstName, existingCustomer.lastName].filter(Boolean).join(' ')
+          : null
+      });
+    } catch (logError) {
+      console.error("Mijozni o'chirish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {

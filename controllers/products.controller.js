@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const normalizeProductName = (value) => {
   if (!value) return '';
@@ -30,7 +31,8 @@ export const getProducts = async (req, res) => {
     const products = await prisma.product.findMany({
       include: {
         batches: {
-          orderBy: { createdAt: 'asc' }
+          orderBy: { createdAt: 'asc' },
+          include: { units: true, warehouse: true }
         }
       }
     });
@@ -108,6 +110,18 @@ export const createProduct = async (req, res) => {
 
       return newProd;
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'Product',
+        entityId: product.id,
+        entityLabel: product.name
+      });
+    } catch (logError) {
+      console.error("Tovar qo'shish logini yozishda xatolik:", logError);
+    }
 
     res.status(201).json(product);
   } catch (error) {
@@ -198,6 +212,18 @@ export const updateProduct = async (req, res) => {
       return updatedProduct;
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Product',
+        entityId: result.id,
+        entityLabel: result.name
+      });
+    } catch (logError) {
+      console.error("Tovarni tahrirlash logini yozishda xatolik:", logError);
+    }
+
     res.json({
       success: true,
       product: result
@@ -273,6 +299,18 @@ export const deleteProduct = async (req, res) => {
       });
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Product',
+        entityId: productId,
+        entityLabel: existingProduct.name
+      });
+    } catch (logError) {
+      console.error("Tovarni o'chirish logini yozishda xatolik:", logError);
+    }
+
     res.json({
       success: true,
       message: "Tovar muvaffaqiyatli o'chirildi"
@@ -309,7 +347,8 @@ export const archiveProductBatch = async (req, res) => {
     const batchId = Number(req.params.id);
 
     const batch = await prisma.productBatch.findUnique({
-      where: { id: batchId }
+      where: { id: batchId },
+      include: { product: true }
     });
 
     if (!batch) {
@@ -328,6 +367,18 @@ export const archiveProductBatch = async (req, res) => {
       where: { id: batchId },
       data: { isArchived: true }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'ARCHIVE',
+        entityType: 'ProductBatch',
+        entityId: batchId,
+        entityLabel: batch.product?.name || null
+      });
+    } catch (logError) {
+      console.error("Partiyani arxivlash logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {
@@ -413,6 +464,19 @@ export const increaseProductStock = async (req, res) => {
             buyCurrency: currency
           }
         });
+
+        try {
+          await logActivity(tx, {
+            actor: req.user,
+            action: 'UPDATE',
+            entityType: 'Product',
+            entityId: productId,
+            entityLabel: currentProduct.name,
+            note: "Omborga kirim qilindi"
+          });
+        } catch (logError) {
+          console.error("Ombor kirim logini yozishda xatolik:", logError);
+        }
       }
     });
 
@@ -496,6 +560,19 @@ export const decreaseProductStock = async (req, res) => {
             quantity: { decrement: qtyToDecrease }
           }
         });
+
+        try {
+          await logActivity(tx, {
+            actor: req.user,
+            action: 'UPDATE',
+            entityType: 'Product',
+            entityId: productId,
+            entityLabel: currentProduct.name,
+            note: "Ombordan ayirildi"
+          });
+        } catch (logError) {
+          console.error("Ombor ayirish logini yozishda xatolik:", logError);
+        }
       }
     });
 

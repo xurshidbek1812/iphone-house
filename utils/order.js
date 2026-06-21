@@ -36,7 +36,13 @@ export const getMainCashbox = async (tx, cashboxId) => {
   return mainCashbox;
 };
 
-export const allocateStockFIFO = async (tx, productId, requestedQty, preferredBatchId = null) => {
+export const allocateStockFIFO = async (
+  tx,
+  productId,
+  requestedQty,
+  preferredBatchId = null,
+  warehouseId = null
+) => {
   const qty = Number(requestedQty);
 
   if (isNaN(qty) || qty <= 0) {
@@ -61,7 +67,8 @@ export const allocateStockFIFO = async (tx, productId, requestedQty, preferredBa
       where: {
         id: Number(preferredBatchId),
         productId: Number(productId),
-        isArchived: false
+        isArchived: false,
+        ...(warehouseId ? { warehouseId: Number(warehouseId) } : {})
       }
     });
 
@@ -91,7 +98,8 @@ export const allocateStockFIFO = async (tx, productId, requestedQty, preferredBa
     where: {
       productId: Number(productId),
       isArchived: false,
-      quantity: { gt: 0 }
+      quantity: { gt: 0 },
+      ...(warehouseId ? { warehouseId: Number(warehouseId) } : {})
     },
     orderBy: { createdAt: 'asc' }
   });

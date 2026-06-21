@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -54,6 +55,18 @@ export const createCategory = async (req, res) => {
     const category = await prisma.category.create({
       data: { name: name.trim() }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'Category',
+        entityId: category.id,
+        entityLabel: category.name
+      });
+    } catch (logError) {
+      console.error("Kategoriya qo'shish logini yozishda xatolik:", logError);
+    }
 
     res.json(category);
   } catch (error) {
@@ -114,6 +127,18 @@ export const updateCategory = async (req, res) => {
       }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Category',
+        entityId: updatedCategory.id,
+        entityLabel: updatedCategory.name
+      });
+    } catch (logError) {
+      console.error("Kategoriyani tahrirlash logini yozishda xatolik:", logError);
+    }
+
     res.json(updatedCategory);
   } catch (error) {
     console.error("Kategoriyani tahrirlashda xatolik:", error);
@@ -133,9 +158,25 @@ export const deleteCategory = async (req, res) => {
   try {
     const categoryId = Number(req.params.id);
 
+    const existingCategory = await prisma.category.findUnique({
+      where: { id: categoryId }
+    });
+
     await prisma.category.delete({
       where: { id: categoryId }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Category',
+        entityId: categoryId,
+        entityLabel: existingCategory?.name || null
+      });
+    } catch (logError) {
+      console.error("Kategoriyani o'chirish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {

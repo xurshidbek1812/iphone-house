@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -41,6 +42,18 @@ export const createSupplier = async (req, res) => {
       }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'Supplier',
+        entityId: newSupplier.id,
+        entityLabel: newSupplier.name
+      });
+    } catch (logError) {
+      console.error("Ta'minotchi qo'shish logini yozishda xatolik:", logError);
+    }
+
     res.json(newSupplier);
   } catch (error) {
     console.error("Ta'minotchi qo'shishda xato:", error);
@@ -79,6 +92,18 @@ export const updateSupplier = async (req, res) => {
       }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Supplier',
+        entityId: updatedSupplier.id,
+        entityLabel: updatedSupplier.name
+      });
+    } catch (logError) {
+      console.error("Ta'minotchini tahrirlash logini yozishda xatolik:", logError);
+    }
+
     res.json(updatedSupplier);
   } catch (error) {
     console.error("Ta'minotchini tahrirlashda xato:", error);
@@ -96,9 +121,27 @@ export const deleteSupplier = async (req, res) => {
   }
 
   try {
-    await prisma.supplier.delete({
-      where: { id: Number(req.params.id) }
+    const supplierId = Number(req.params.id);
+
+    const existingSupplier = await prisma.supplier.findUnique({
+      where: { id: supplierId }
     });
+
+    await prisma.supplier.delete({
+      where: { id: supplierId }
+    });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'Supplier',
+        entityId: supplierId,
+        entityLabel: existingSupplier?.name || null
+      });
+    } catch (logError) {
+      console.error("Ta'minotchini o'chirish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {

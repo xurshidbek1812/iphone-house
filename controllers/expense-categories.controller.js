@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { PERMISSIONS } from '../utils/permissions.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const hasPermission = (user, permission) => {
   const role = String(user?.role || '').toLowerCase();
@@ -47,6 +48,18 @@ export const createExpenseCategoryGroup = async (req, res) => {
       data: { name }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'ExpenseCategoryGroup',
+        entityId: group.id,
+        entityLabel: group.name
+      });
+    } catch (logError) {
+      console.error("Xarajat guruhi yaratish logini yozishda xatolik:", logError);
+    }
+
     res.json(group);
   } catch (error) {
     console.error('createExpenseCategoryGroup xatosi:', error);
@@ -76,6 +89,18 @@ export const updateExpenseCategoryGroup = async (req, res) => {
       where: { id },
       data: { name }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'ExpenseCategoryGroup',
+        entityId: group.id,
+        entityLabel: group.name
+      });
+    } catch (logError) {
+      console.error("Xarajat guruhini tahrirlash logini yozishda xatolik:", logError);
+    }
 
     res.json(group);
   } catch (error) {
@@ -126,6 +151,18 @@ export const deleteExpenseCategoryGroup = async (req, res) => {
       where: { id }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'ExpenseCategoryGroup',
+        entityId: id,
+        entityLabel: group.name
+      });
+    } catch (logError) {
+      console.error("Xarajat guruhini o'chirish logini yozishda xatolik:", logError);
+    }
+
     res.json({ success: true });
   } catch (error) {
     console.error('deleteExpenseCategoryGroup xatosi:', error);
@@ -155,6 +192,18 @@ export const createExpenseCategory = async (req, res) => {
         group: true
       }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'CREATE',
+        entityType: 'ExpenseCategory',
+        entityId: category.id,
+        entityLabel: category.name
+      });
+    } catch (logError) {
+      console.error("Xarajat moddasi yaratish logini yozishda xatolik:", logError);
+    }
 
     res.json(category);
   } catch (error) {
@@ -193,6 +242,18 @@ export const updateExpenseCategory = async (req, res) => {
       }
     });
 
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'ExpenseCategory',
+        entityId: category.id,
+        entityLabel: category.name
+      });
+    } catch (logError) {
+      console.error("Xarajat moddasini tahrirlash logini yozishda xatolik:", logError);
+    }
+
     res.json(category);
   } catch (error) {
     console.error('updateExpenseCategory xatosi:', error);
@@ -223,9 +284,25 @@ export const deleteExpenseCategory = async (req, res) => {
       });
     }
 
+    const existingCategory = await prisma.expenseCategory.findUnique({
+      where: { id }
+    });
+
     await prisma.expenseCategory.delete({
       where: { id }
     });
+
+    try {
+      await logActivity(prisma, {
+        actor: req.user,
+        action: 'DELETE',
+        entityType: 'ExpenseCategory',
+        entityId: id,
+        entityLabel: existingCategory?.name || null
+      });
+    } catch (logError) {
+      console.error("Xarajat moddasini o'chirish logini yozishda xatolik:", logError);
+    }
 
     res.json({ success: true });
   } catch (error) {

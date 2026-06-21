@@ -4,10 +4,24 @@ import {
   markAllNotificationsAsRead
 } from '../utils/notifications.js';
 
-const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+const NOTIFICATION_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
+
+const purgeOldNotifications = async () => {
+  try {
+    await prisma.notification.deleteMany({
+      where: {
+        createdAt: { lt: new Date(Date.now() - NOTIFICATION_RETENTION_MS) }
+      }
+    });
+  } catch (error) {
+    console.error("Eski notificationlarni o'chirishda xatolik:", error);
+  }
+};
 
 export const getMyNotifications = async (req, res) => {
   try {
+    await purgeOldNotifications();
+
     const page = Math.max(1, Number(req.query.page || 1));
     const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
     const skip = (page - 1) * limit;

@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { allocateStockFIFO } from '../utils/order.js';
+import { logActivity } from '../utils/activityLog.js';
 
 const generateContractNumber = async (tx) => {
   while (true) {
@@ -389,6 +390,15 @@ export const createContractDraft = async (req, res) => {
           });
         }
 
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'CREATE',
+          entityType: 'Contract',
+          entityId: createdContract.id,
+          entityLabel: contractNumber,
+          toStatus: 'DRAFT'
+        });
+
         return createdContract.id;
       },
       {
@@ -684,6 +694,14 @@ export const updateContractDraft = async (req, res) => {
         });
       }
 
+      await logActivity(tx, {
+        actor: req.user,
+        action: 'UPDATE',
+        entityType: 'Contract',
+        entityId: contractId,
+        entityLabel: existing.contractNumber
+      });
+
       return true;
     });
 
@@ -799,8 +817,19 @@ export const confirmContract = async (req, res) => {
           where: { id: contract.id },
           data: {
             status: 'PAYMENT_PENDING',
-            confirmedAt: new Date()
+            confirmedAt: new Date(),
+            confirmedByName: req.user.fullName || req.user.username
           }
+        });
+
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'CONFIRM',
+          entityType: 'Contract',
+          entityId: contract.id,
+          entityLabel: contract.contractNumber,
+          fromStatus: 'DRAFT',
+          toStatus: 'PAYMENT_PENDING'
         });
 
         return true;
@@ -930,6 +959,15 @@ export const deleteContract = async (req, res) => {
 
         await tx.contract.delete({
           where: { id: contractId }
+        });
+
+        await logActivity(tx, {
+          actor: req.user,
+          action: 'DELETE',
+          entityType: 'Contract',
+          entityId: contractId,
+          entityLabel: contract.contractNumber,
+          fromStatus: contract.status
         });
 
         return true;
@@ -1233,9 +1271,27 @@ export const collectContractPayment = async (req, res) => {
           data: {
             debtAmount: newRemainingDebt,
             monthlyPayment: newMonthlyPayment,
-            status: newStatus
+            status: newStatus,
+            ...(newStatus === 'COMPLETED'
+              ? {
+                  completedByName: req.user.fullName || req.user.username,
+                  completedAt: new Date()
+                }
+              : {})
           }
         });
+
+        if (newStatus === 'COMPLETED') {
+          await logActivity(tx, {
+            actor: req.user,
+            action: 'COMPLETE',
+            entityType: 'Contract',
+            entityId: contract.id,
+            entityLabel: contract.contractNumber,
+            fromStatus: 'PAYMENT_PENDING',
+            toStatus: 'COMPLETED'
+          });
+        }
 
         const updatedContract = await tx.contract.findUnique({
           where: { id: contract.id },
