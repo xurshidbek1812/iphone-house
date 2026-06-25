@@ -438,6 +438,9 @@ export const updateInvoice = async (req, res) => {
       await tx.supplierInvoiceItem.createMany({
         data: normalizedItems
       });
+    }, {
+      maxWait: 10000,
+      timeout: 20000
     });
 
     await logActivity(prisma, {
@@ -692,6 +695,9 @@ export const updateInvoiceStatus = async (req, res) => {
           fromStatus: invoice.status,
           toStatus: 'Tasdiqlandi'
         });
+      }, {
+        maxWait: 10000,
+        timeout: 20000
       });
 
       return res.json({ success: true });
@@ -800,6 +806,9 @@ export const deleteInvoice = async (req, res) => {
       await tx.supplierInvoice.delete({
         where: { id: invoice.id }
       });
+    }, {
+      maxWait: 10000,
+      timeout: 20000
     });
 
     await logActivity(prisma, {
