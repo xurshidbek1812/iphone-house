@@ -70,6 +70,10 @@ const validateInvoiceItems = (items) => {
         return `${item.name || "Mahsulot"} uchun har bir telefonda ikkita IMEI ham kiritilishi shart!`;
       }
 
+      if (flatCodes.some((code) => !/^\d{15}$/.test(code))) {
+        return `${item.name || "Mahsulot"} uchun har bir IMEI aynan 15 ta raqamdan iborat bo'lishi kerak!`;
+      }
+
       if (new Set(flatCodes).size !== flatCodes.length) {
         return `${item.name || "Mahsulot"} uchun IMEI raqamlari ichida takrorlanish bor!`;
       }
