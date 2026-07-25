@@ -101,10 +101,23 @@ export const getProfitSummary = async (req, res) => {
     const rows = await prisma.$queryRaw`
       SELECT
         DATE(o."createdAt") AS day,
-        SUM((a."unitPrice" - a."unitCost") * a.quantity) AS profit
+        SUM(
+          (
+            a."unitPrice" -
+            CASE
+              WHEN pb."buyCurrency" = 'USD'
+                   AND si."exchangeRate" IS NOT NULL
+                   AND si."exchangeRate" > 0
+                THEN a."unitCost" * si."exchangeRate"
+              ELSE a."unitCost"
+            END
+          ) * a.quantity
+        ) AS profit
       FROM "OrderItemBatchAllocation" a
-      JOIN "OrderItem" oi ON oi.id = a."orderItemId"
-      JOIN "Order" o ON o.id = oi."orderId"
+      JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
+      JOIN "Order"        o  ON o.id   = oi."orderId"
+      JOIN "ProductBatch" pb ON pb.id  = a."batchId"
+      LEFT JOIN "SupplierInvoice" si ON si.id = pb."supplierInvoiceId"
       WHERE o.status = 'COMPLETED'
         AND o."createdAt" >= ${monthStart}
         AND o."createdAt" <= ${todayEnd}
