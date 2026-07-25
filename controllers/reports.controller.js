@@ -83,6 +83,69 @@ const sendWorkbook = async (res, workbook, fileName) => {
   return res.end();
 };
 
+export const getProfitSummary = async (req, res) => {
+  if (String(req.user?.role || '').toLowerCase() !== 'director') {
+    return res.status(403).json({ error: "Faqat direktor uchun!" });
+  }
+
+  try {
+    const now = new Date();
+
+    const monthStart = new Date(now);
+    monthStart.setDate(monthStart.getDate() - 29);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const rows = await prisma.$queryRaw`
+      SELECT
+        DATE(o."createdAt") AS day,
+        SUM((a."unitPrice" - a."unitCost") * a.quantity) AS profit
+      FROM "OrderItemBatchAllocation" a
+      JOIN "OrderItem" oi ON oi.id = a."orderItemId"
+      JOIN "Order" o ON o.id = oi."orderId"
+      WHERE o.status = 'COMPLETED'
+        AND o."createdAt" >= ${monthStart}
+        AND o."createdAt" <= ${todayEnd}
+        AND a."unitCost" IS NOT NULL
+        AND a."unitPrice" IS NOT NULL
+      GROUP BY DATE(o."createdAt")
+      ORDER BY day ASC
+    `;
+
+    const profitByDate = {};
+    for (const row of rows) {
+      const dateStr = new Date(row.day).toISOString().slice(0, 10);
+      profitByDate[dateStr] = Number(row.profit || 0);
+    }
+
+    const dates = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+
+    const todayStr = now.toISOString().slice(0, 10);
+    const weekDates = dates.slice(-7);
+
+    const today = profitByDate[todayStr] || 0;
+    const week = weekDates.reduce((sum, d) => sum + (profitByDate[d] || 0), 0);
+    const month = dates.reduce((sum, d) => sum + (profitByDate[d] || 0), 0);
+
+    const chart = dates.map((date) => ({
+      date,
+      profit: profitByDate[date] || 0
+    }));
+
+    return res.json({ today, week, month, chart });
+  } catch (error) {
+    console.error('getProfitSummary xatosi:', error);
+    return res.status(500).json({ error: "Foyda ma'lumotlarini olishda xatolik" });
+  }
+};
+
 export const exportWarehouseStockReport = async (req, res) => {
   try {
     const { date, format } = req.query;
