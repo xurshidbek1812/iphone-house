@@ -153,20 +153,22 @@ export const getProfitSummary = async (req, res) => {
 
     const chart = dates.map((date) => ({ date, profit: profitByDate[date] || 0 }));
 
-    // Previous calendar month — separate query since it may be outside the 30-day window
+    // Previous calendar month — per-day data for chart + total
     const lastMonthRows = await prisma.$queryRaw`
-      SELECT SUM(
-        (
-          a."unitPrice" -
-          CASE
-            WHEN pb."buyCurrency" = 'USD'
-                 AND si."exchangeRate" IS NOT NULL
-                 AND si."exchangeRate" > 0
-              THEN a."unitCost" * si."exchangeRate"
-            ELSE a."unitCost"
-          END
-        ) * a.quantity
-      ) AS profit
+      SELECT
+        DATE(o."createdAt") AS day,
+        SUM(
+          (
+            a."unitPrice" -
+            CASE
+              WHEN pb."buyCurrency" = 'USD'
+                   AND si."exchangeRate" IS NOT NULL
+                   AND si."exchangeRate" > 0
+                THEN a."unitCost" * si."exchangeRate"
+              ELSE a."unitCost"
+            END
+          ) * a.quantity
+        ) AS profit
       FROM "OrderItemBatchAllocation" a
       JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
       JOIN "Order"        o  ON o.id   = oi."orderId"
@@ -177,10 +179,25 @@ export const getProfitSummary = async (req, res) => {
         AND o."createdAt" <= ${lastMonthEnd}
         AND a."unitCost" IS NOT NULL
         AND a."unitPrice" IS NOT NULL
+      GROUP BY DATE(o."createdAt")
+      ORDER BY day ASC
     `;
-    const lastMonth = Number(lastMonthRows[0]?.profit || 0);
 
-    return res.json({ today, week, month, lastMonth, chart });
+    const lastMonthProfitByDate = {};
+    for (const row of lastMonthRows) {
+      const dateStr = new Date(row.day).toISOString().slice(0, 10);
+      lastMonthProfitByDate[dateStr] = Number(row.profit || 0);
+    }
+
+    const daysInLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+    const lastMonthChart = [];
+    for (let d = 1; d <= daysInLastMonth; d++) {
+      const date = new Date(now.getFullYear(), now.getMonth() - 1, d).toISOString().slice(0, 10);
+      lastMonthChart.push({ date, profit: lastMonthProfitByDate[date] || 0 });
+    }
+    const lastMonth = lastMonthChart.reduce((sum, d) => sum + d.profit, 0);
+
+    return res.json({ today, week, month, lastMonth, lastMonthChart, chart });
   } catch (error) {
     console.error('getProfitSummary xatosi:', error);
     return res.status(500).json({ error: "Foyda ma'lumotlarini olishda xatolik" });
