@@ -98,6 +98,10 @@ export const getProfitSummary = async (req, res) => {
     const todayEnd = new Date(now);
     todayEnd.setHours(23, 59, 59, 999);
 
+    // Previous calendar month (e.g. all of July when today is in August)
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const lastMonthEnd   = new Date(now.getFullYear(), now.getMonth(),     0, 23, 59, 59, 999);
+
     const rows = await prisma.$queryRaw`
       SELECT
         DATE(o."createdAt") AS day,
@@ -144,15 +148,39 @@ export const getProfitSummary = async (req, res) => {
     const weekDates = dates.slice(-7);
 
     const today = profitByDate[todayStr] || 0;
-    const week = weekDates.reduce((sum, d) => sum + (profitByDate[d] || 0), 0);
+    const week  = weekDates.reduce((sum, d) => sum + (profitByDate[d] || 0), 0);
     const month = dates.reduce((sum, d) => sum + (profitByDate[d] || 0), 0);
 
-    const chart = dates.map((date) => ({
-      date,
-      profit: profitByDate[date] || 0
-    }));
+    const chart = dates.map((date) => ({ date, profit: profitByDate[date] || 0 }));
 
-    return res.json({ today, week, month, chart });
+    // Previous calendar month — separate query since it may be outside the 30-day window
+    const lastMonthRows = await prisma.$queryRaw`
+      SELECT SUM(
+        (
+          a."unitPrice" -
+          CASE
+            WHEN pb."buyCurrency" = 'USD'
+                 AND si."exchangeRate" IS NOT NULL
+                 AND si."exchangeRate" > 0
+              THEN a."unitCost" * si."exchangeRate"
+            ELSE a."unitCost"
+          END
+        ) * a.quantity
+      ) AS profit
+      FROM "OrderItemBatchAllocation" a
+      JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
+      JOIN "Order"        o  ON o.id   = oi."orderId"
+      JOIN "ProductBatch" pb ON pb.id  = a."batchId"
+      LEFT JOIN "SupplierInvoice" si ON si.id = pb."supplierInvoiceId"
+      WHERE o.status = 'COMPLETED'
+        AND o."createdAt" >= ${lastMonthStart}
+        AND o."createdAt" <= ${lastMonthEnd}
+        AND a."unitCost" IS NOT NULL
+        AND a."unitPrice" IS NOT NULL
+    `;
+    const lastMonth = Number(lastMonthRows[0]?.profit || 0);
+
+    return res.json({ today, week, month, lastMonth, chart });
   } catch (error) {
     console.error('getProfitSummary xatosi:', error);
     return res.status(500).json({ error: "Foyda ma'lumotlarini olishda xatolik" });
@@ -494,5 +522,202 @@ export const exportExpensesReport = async (req, res) => {
     return res.status(500).json({
       error: 'Xarajatlar hisobotini yaratishda xatolik yuz berdi'
     });
+  }
+};
+
+export const exportSoldItemsReport = async (req, res) => {
+  try {
+    const { from, to, format } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "Sana oralig'i tanlanmagan!" });
+
+    const range = parseDateRange(from, to);
+    if (!range) return res.status(400).json({ error: "Sana noto'g'ri formatda!" });
+
+    const allocations = await prisma.orderItemBatchAllocation.findMany({
+      where: {
+        orderItem: {
+          order: {
+            status: 'COMPLETED',
+            createdAt: { gte: range.fromDate, lte: range.toDate }
+          }
+        }
+      },
+      include: {
+        orderItem: {
+          include: {
+            order: {
+              include: {
+                customer: { include: { phones: true } },
+                user: { select: { fullName: true, username: true } }
+              }
+            },
+            product: true
+          }
+        },
+        batch: {
+          include: {
+            supplier: true,
+            supplierInvoice: true
+          }
+        }
+      },
+      orderBy: { id: 'asc' }
+    });
+
+    const rows = allocations.map((a) => {
+      const item     = a.orderItem;
+      const order    = item.order;
+      const product  = item.product;
+      const batch    = a.batch;
+      const supplier = batch?.supplier;
+      const invoice  = batch?.supplierInvoice;
+      const customer = order.customer;
+
+      const customerName = customer
+        ? getCustomerFullName(customer)
+        : order.otherName || '';
+
+      const mainPhone = customer?.phones?.find((p) => p.isMain) || customer?.phones?.[0];
+      const customerPhone = mainPhone?.phone || order.otherPhone || '';
+
+      const qty        = Number(a.quantity || 0);
+      const buyPrice   = Number(a.unitCost || 0);
+      const soldPrice  = Number(a.unitPrice || item.unitPrice || 0);
+
+      return {
+        supplierId:     supplier?.id || '',
+        supplierName:   supplier?.name || invoice?.supplierName || '',
+        productId:      product?.customId || '',
+        productName:    product?.name || '',
+        categoryId:     '',
+        categoryName:   product?.category || '',
+        customerName,
+        customerPhone,
+        orderId:        order.orderNumber,
+        date:           formatDateDots(new Date(order.createdAt)),
+        quantity:       qty,
+        buyPrice,
+        buyCurrency:    batch?.buyCurrency || 'UZS',
+        exchangeRate:   Number(invoice?.exchangeRate || 0),
+        salePrice:      Number(batch?.salePrice || product?.salePrice || 0),
+        soldPrice,
+        totalSoldPrice: qty * soldPrice,
+        maslahatchi:    order.user?.fullName || order.user?.username || '',
+        orderType:      order.orderType || ''
+      };
+    });
+
+    if (format === 'xlsx') {
+      const workbook  = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Chiqim bo'lgan tovarlar");
+
+      styleReportSheet(worksheet, [
+        { header: '№',                  key: 'index',          width: 6  },
+        { header: 'Taminotchi ID',      key: 'supplierId',     width: 14 },
+        { header: 'Taminotchi nomi',    key: 'supplierName',   width: 26 },
+        { header: 'Tovar ID',           key: 'productId',      width: 12 },
+        { header: 'Tovar nomi',         key: 'productName',    width: 30 },
+        { header: 'Kategoriya ID',      key: 'categoryId',     width: 14 },
+        { header: 'Kategoriya nomi',    key: 'categoryName',   width: 22 },
+        { header: 'Mijoz ismi',         key: 'customerName',   width: 28 },
+        { header: 'Mijoz raqami',       key: 'customerPhone',  width: 18 },
+        { header: 'Naqd savdo ID',      key: 'orderId',        width: 16 },
+        { header: 'Sana',               key: 'date',           width: 14 },
+        { header: 'Soni',               key: 'quantity',       width: 10 },
+        { header: 'Kirim narxi',        key: 'buyPrice',       width: 14 },
+        { header: 'Kirim valyutasi',    key: 'buyCurrency',    width: 16 },
+        { header: 'Kirim kursi',        key: 'exchangeRate',   width: 14 },
+        { header: 'Sotish narxi',       key: 'salePrice',      width: 14 },
+        { header: 'Sotilgan narx',      key: 'soldPrice',      width: 14 },
+        { header: 'Jami sotilgan narxi',key: 'totalSoldPrice', width: 20 },
+        { header: 'Maslahatchi',        key: 'maslahatchi',    width: 24 },
+        { header: 'Savdo turi',         key: 'orderType',      width: 16 }
+      ]);
+
+      addReportRows(worksheet, rows);
+      ['quantity', 'exchangeRate', 'salePrice', 'soldPrice', 'totalSoldPrice'].forEach(
+        (col) => { worksheet.getColumn(col).numFmt = '#,##0.##'; }
+      );
+      worksheet.getColumn('buyPrice').numFmt = '#,##0.##';
+
+      const fromFmt = from.split('-').reverse().join('.');
+      const toFmt   = to.split('-').reverse().join('.');
+      return sendWorkbook(res, workbook, `R0009-${fromFmt}-${toFmt}.xlsx`);
+    }
+
+    return res.json({ success: true, from, to, count: rows.length, items: rows });
+  } catch (error) {
+    console.error('exportSoldItemsReport xatosi:', error);
+    return res.status(500).json({ error: "Chiqim tovarlar hisobotini yaratishda xatolik yuz berdi" });
+  }
+};
+
+export const exportSalesReport = async (req, res) => {
+  try {
+    const { from, to, format } = req.query;
+    if (!from || !to) return res.status(400).json({ error: "Sana oralig'i tanlanmagan!" });
+
+    const range = parseDateRange(from, to);
+    if (!range) return res.status(400).json({ error: "Sana noto'g'ri formatda!" });
+
+    const payments = await prisma.payment.findMany({
+      where: {
+        direction: 'IN',
+        status:    'POSTED',
+        orderId:   { not: null },
+        paidAt:    { gte: range.fromDate, lte: range.toDate }
+      },
+      include: {
+        order: { include: { customer: true } },
+        user:  { select: { fullName: true, username: true } }
+      },
+      orderBy: { paidAt: 'asc' }
+    });
+
+    const rows = payments.map((p) => {
+      const order    = p.order;
+      const customer = order?.customer;
+      return {
+        customerName: customer
+          ? getCustomerFullName(customer)
+          : (order?.otherName || ''),
+        orderId:     order?.orderNumber || '',
+        amount:      Number(p.amount || 0),
+        method:      p.method || '',
+        paidDate:    formatDateDots(new Date(p.paidAt)),
+        cashier:     p.user?.fullName || p.user?.username || '',
+        note:        p.note || '',
+        confirmedAt: formatDateTimeDots(new Date(p.paidAt))
+      };
+    });
+
+    if (format === 'xlsx') {
+      const workbook  = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Savdolar');
+
+      styleReportSheet(worksheet, [
+        { header: '№',                 key: 'index',       width: 6  },
+        { header: 'Mijoz F.I.O',       key: 'customerName',width: 34 },
+        { header: 'Savdo ID',          key: 'orderId',     width: 14 },
+        { header: 'Summa',             key: 'amount',      width: 16 },
+        { header: "To'lov turi",       key: 'method',      width: 16 },
+        { header: "To'lov kuni",       key: 'paidDate',    width: 14 },
+        { header: 'Kassir',            key: 'cashier',     width: 24 },
+        { header: 'Izoh',              key: 'note',        width: 30 },
+        { header: 'Tasdiqlangan sana', key: 'confirmedAt', width: 20 }
+      ]);
+
+      addReportRows(worksheet, rows);
+      worksheet.getColumn('amount').numFmt = '#,##0';
+
+      const fromFmt = from.split('-').reverse().join('.');
+      const toFmt   = to.split('-').reverse().join('.');
+      return sendWorkbook(res, workbook, `R0004-${fromFmt}-${toFmt}.xlsx`);
+    }
+
+    return res.json({ success: true, from, to, count: rows.length, items: rows });
+  } catch (error) {
+    console.error('exportSalesReport xatosi:', error);
+    return res.status(500).json({ error: 'Savdolar hisobotini yaratishda xatolik yuz berdi' });
   }
 };
