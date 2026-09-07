@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 
 import { authenticateToken } from './middleware/auth.js';
@@ -40,6 +41,8 @@ if (!JWT_SECRET) {
 /* =========================
    MIDDLEWARE
 ========================= */
+
+app.use(compression());
 
 app.use(cors({
   origin: [
