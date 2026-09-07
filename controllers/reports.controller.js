@@ -116,6 +116,7 @@ export const getProfitSummary = async (req, res) => {
               ELSE a."unitCost"
             END
           ) * a.quantity
+          - COALESCE(oi."discountAmount", 0) * (a.quantity / NULLIF(oi.quantity, 0))
         ) AS profit
       FROM "OrderItemBatchAllocation" a
       JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
@@ -168,6 +169,7 @@ export const getProfitSummary = async (req, res) => {
               ELSE a."unitCost"
             END
           ) * a.quantity
+          - COALESCE(oi."discountAmount", 0) * (a.quantity / NULLIF(oi.quantity, 0))
         ) AS profit
       FROM "OrderItemBatchAllocation" a
       JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
