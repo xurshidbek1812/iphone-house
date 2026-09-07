@@ -154,11 +154,13 @@ const validateDirectSaleItem = async (tx, item, warehouseId = null) => {
 export const getOrders = async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(50, Math.max(1, Number(req.query.limit || 10)));
-    const skip = (page - 1) * limit;
-
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || 'ALL').trim().toUpperCase();
+
+    // Allow larger pages when fetching a specific status (e.g. payment collection)
+    const maxLimit = status !== 'ALL' ? 500 : 50;
+    const limit = Math.min(maxLimit, Math.max(1, Number(req.query.limit || 10)));
+    const skip = (page - 1) * limit;
 
     const where = {
       ...(status !== 'ALL' ? { status } : {}),
