@@ -154,8 +154,10 @@ export const getProfitSummary = async (req, res) => {
 
     const chart = dates.map((date) => ({ date, profit: profitByDate[date] || 0 }));
 
-    // Previous calendar month — per-day data for chart + total
-    const lastMonthRows = await prisma.$queryRaw`
+    // Current month (1st of this month → today) and previous calendar month — run in parallel
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+
+    const profitQueryForRange = (start, end) => prisma.$queryRaw`
       SELECT
         DATE(o."createdAt") AS day,
         SUM(
@@ -177,31 +179,109 @@ export const getProfitSummary = async (req, res) => {
       JOIN "ProductBatch" pb ON pb.id  = a."batchId"
       LEFT JOIN "SupplierInvoice" si ON si.id = pb."supplierInvoiceId"
       WHERE o.status = 'COMPLETED'
-        AND o."createdAt" >= ${lastMonthStart}
-        AND o."createdAt" <= ${lastMonthEnd}
+        AND o."createdAt" >= ${start}
+        AND o."createdAt" <= ${end}
         AND a."unitCost" IS NOT NULL
         AND a."unitPrice" IS NOT NULL
       GROUP BY DATE(o."createdAt")
       ORDER BY day ASC
     `;
 
-    const lastMonthProfitByDate = {};
-    for (const row of lastMonthRows) {
-      const dateStr = new Date(row.day).toISOString().slice(0, 10);
-      lastMonthProfitByDate[dateStr] = Number(row.profit || 0);
-    }
+    const [lastMonthRows, thisMonthRows] = await Promise.all([
+      profitQueryForRange(lastMonthStart, lastMonthEnd),
+      profitQueryForRange(thisMonthStart, todayEnd)
+    ]);
 
-    const daysInLastMonth = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
-    const lastMonthChart = [];
-    for (let d = 1; d <= daysInLastMonth; d++) {
-      const date = new Date(now.getFullYear(), now.getMonth() - 1, d).toISOString().slice(0, 10);
-      lastMonthChart.push({ date, profit: lastMonthProfitByDate[date] || 0 });
-    }
+    const buildDailyChart = (rows, startDate, endDate) => {
+      const byDate = {};
+      for (const row of rows) {
+        byDate[new Date(row.day).toISOString().slice(0, 10)] = Number(row.profit || 0);
+      }
+      const result = [];
+      const cur = new Date(startDate);
+      while (cur <= endDate) {
+        const date = cur.toISOString().slice(0, 10);
+        result.push({ date, profit: byDate[date] || 0 });
+        cur.setDate(cur.getDate() + 1);
+      }
+      return result;
+    };
+
+    const lastMonthChart = buildDailyChart(lastMonthRows, lastMonthStart, lastMonthEnd);
+    const thisMonthChart = buildDailyChart(thisMonthRows, thisMonthStart, new Date(todayEnd));
+
     const lastMonth = lastMonthChart.reduce((sum, d) => sum + d.profit, 0);
+    const thisMonth = thisMonthChart.reduce((sum, d) => sum + d.profit, 0);
 
-    return res.json({ today, week, month, lastMonth, lastMonthChart, chart });
+    return res.json({ today, week, month, lastMonth, lastMonthChart, thisMonth, thisMonthChart, chart });
   } catch (error) {
     console.error('getProfitSummary xatosi:', error);
+    return res.status(500).json({ error: "Foyda ma'lumotlarini olishda xatolik" });
+  }
+};
+
+export const getProfitRange = async (req, res) => {
+  if (String(req.user?.role || '').toLowerCase() !== 'director') {
+    return res.status(403).json({ error: "Faqat direktor uchun!" });
+  }
+
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: "Sanalarni kiriting!" });
+
+  const range = parseDateRange(from, to);
+  if (!range) return res.status(400).json({ error: "Sana noto'g'ri formatda!" });
+
+  const { fromDate, toDate } = range;
+  const diffDays = (toDate - fromDate) / (1000 * 60 * 60 * 24);
+  if (diffDays > 30) return res.status(400).json({ error: "Maksimal davr 30 kun!" });
+
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT
+        DATE(o."createdAt") AS day,
+        SUM(
+          (
+            a."unitPrice" -
+            CASE
+              WHEN pb."buyCurrency" = 'USD'
+                   AND si."exchangeRate" IS NOT NULL
+                   AND si."exchangeRate" > 0
+                THEN a."unitCost" * si."exchangeRate"
+              ELSE a."unitCost"
+            END
+          ) * a.quantity
+          - COALESCE(oi."discountAmount", 0) * (a.quantity / NULLIF(oi.quantity, 0))
+        ) AS profit
+      FROM "OrderItemBatchAllocation" a
+      JOIN "OrderItem"    oi ON oi.id  = a."orderItemId"
+      JOIN "Order"        o  ON o.id   = oi."orderId"
+      JOIN "ProductBatch" pb ON pb.id  = a."batchId"
+      LEFT JOIN "SupplierInvoice" si ON si.id = pb."supplierInvoiceId"
+      WHERE o.status = 'COMPLETED'
+        AND o."createdAt" >= ${fromDate}
+        AND o."createdAt" <= ${toDate}
+        AND a."unitCost" IS NOT NULL
+        AND a."unitPrice" IS NOT NULL
+      GROUP BY DATE(o."createdAt")
+      ORDER BY day ASC
+    `;
+
+    const byDate = {};
+    for (const row of rows) {
+      byDate[new Date(row.day).toISOString().slice(0, 10)] = Number(row.profit || 0);
+    }
+
+    const chart = [];
+    const cur = new Date(fromDate);
+    while (cur <= toDate) {
+      const date = cur.toISOString().slice(0, 10);
+      chart.push({ date, profit: byDate[date] || 0 });
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    return res.json({ total: chart.reduce((s, d) => s + d.profit, 0), chart });
+  } catch (error) {
+    console.error('getProfitRange xatosi:', error);
     return res.status(500).json({ error: "Foyda ma'lumotlarini olishda xatolik" });
   }
 };

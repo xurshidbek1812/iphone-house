@@ -5,6 +5,7 @@ import {
   exportCashIncomeReport,
   exportExpensesReport,
   getProfitSummary,
+  getProfitRange,
   exportSoldItemsReport,
   exportSalesReport
 } from '../controllers/reports.controller.js';
@@ -12,6 +13,7 @@ import {
 const router = express.Router();
 
 router.get('/profit-summary',  authenticateToken, getProfitSummary);
+router.get('/profit-range',    authenticateToken, getProfitRange);
 router.get('/warehouse-stock', authenticateToken, exportWarehouseStockReport);
 router.get('/cash-income',     authenticateToken, exportCashIncomeReport);
 router.get('/expenses',        authenticateToken, exportExpensesReport);
